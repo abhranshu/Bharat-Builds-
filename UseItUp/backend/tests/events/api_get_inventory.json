@@ -1,0 +1,18 @@
+{
+  "httpMethod": "GET",
+  "path": "/inventory",
+  "queryStringParameters": {
+    "household_id": "hh-test123"
+  },
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "requestContext": {
+    "httpMethod": "GET",
+    "path": "/inventory",
+    "requestId": "EXAMPLE-REQUEST-ID",
+    "stage": "dev"
+  },
+  "isBase64Encoded": false,
+  "body": null
+}

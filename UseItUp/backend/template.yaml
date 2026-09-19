@@ -1,0 +1,444 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: UseItUp — AI-powered food-waste & nutrition backend
+
+# ============================================
+# GLOBALS
+# ============================================
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 60
+    MemorySize: 512
+    Architectures:
+      - arm64
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref AppDataTable
+        BUCKET_NAME: !Ref UploadBucket
+        SNS_TOPIC_ARN: !Ref ExpiryNotificationsTopic
+        BEDROCK_MODEL_ID: anthropic.claude-sonnet-4-20250514-v1:0
+        AWS_LAMBDA_EXEC_WRAPPER: /opt/python/bin/plex
+    Layers:
+      - !Ref CommonDepsLayer
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+Resources:
+
+  # ============================================
+  # DYNAMODB TABLE (single-table design)
+  # ============================================
+  AppDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "UseItUp-${EnvironmentName}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: UseItUp
+
+  # ============================================
+  # S3 BUCKET (image uploads)
+  # ============================================
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "useitup-uploads-${EnvironmentName}-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-uploads
+            Status: Enabled
+            ExpirationInDays: 30
+      Tags:
+        - Key: Project
+          Value: UseItUp
+
+  UploadBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UploadBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowLambdaAccess
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: !Sub "${UploadBucket.Arn}/*"
+
+  # ============================================
+  # SNS (expiry notifications)
+  # ============================================
+  ExpiryNotificationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "UseItUp-expiry-nudges-${EnvironmentName}"
+      Tags:
+        - Key: Project
+          Value: UseItUp
+
+  # ============================================
+  # COMMON DEPENDENCIES LAYER
+  # ============================================
+  CommonDepsLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "UseItUp-common-deps-${EnvironmentName}"
+      ContentUri: layer/
+      CompatibleRuntimes:
+        - python3.12
+      CompatibleArchitectures:
+        - arm64
+
+  # ============================================
+  # LAMBDA PERMISSIONS (S3 triggers)
+  # ============================================
+  IngestBillPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt IngestBillFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Ref UploadBucket
+
+  IngestFridgePhotoPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt IngestFridgePhotoFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Ref UploadBucket
+
+  # ============================================
+  # S3 NOTIFICATION RULES
+  # ============================================
+  BillUploadNotification:
+    Type: AWS::S3::Bucket
+    DependsOn: IngestBillPermission
+    Properties:
+      BucketName: !Sub "useitup-uploads-${EnvironmentName}-${AWS::AccountId}"
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt IngestBillFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
+                  - Name: suffix
+                    Value: .jpg
+
+  # ============================================
+  # API GATEWAY
+  # ============================================
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "UseItUp-api-${EnvironmentName}"
+      StageName: !Sub "${EnvironmentName}"
+      Cors:
+        AllowMethods: "'GET,POST,PUT,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+
+  # ============================================
+  # LAMBDA FUNCTIONS
+  # ============================================
+
+  # --- GET UPLOAD URL ---
+  GetUploadUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "UseItUp-get-upload-url-${EnvironmentName}"
+      Handler: src/functions/get_upload_url/app.handler
+      Description: Generates presigned S3 PUT URL for image upload
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref UploadBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppDataTable
+      Events:
+        GetUploadUrl:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /upload-url
+            Method: post
+
+  # --- INGEST BILL (S3-triggered) ---
+  IngestBillFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "UseItUp-ingest-bill-${EnvironmentName}"
+      Handler: src/functions/ingest_bill/app.handler
+      Description: Processes grocery bills via Textract
+      Timeout: 120
+      MemorySize: 1024
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref UploadBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppDataTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - textract:AnalyzeExpense
+              Resource: "*"
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+      Events:
+        BillUpload:
+          Type: S3
+          Properties:
+            Bucket: !Ref UploadBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
+                  - Name: suffix
+                    Value: .jpg
+
+  # --- INGEST FRIDGE PHOTO (S3-triggered) ---
+  IngestFridgePhotoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "UseItUp-ingest-fridge-photo-${EnvironmentName}"
+      Handler: src/functions/ingest_fridge_photo/app.handler
+      Description: Processes fridge photos via Bedrock Vision
+      Timeout: 120
+      MemorySize: 1024
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref UploadBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppDataTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+      Events:
+        FridgePhotoUpload:
+          Type: S3
+          Properties:
+            Bucket: !Ref UploadBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
+                  - Name: suffix
+                    Value: .jpg
+
+  # --- GET INVENTORY ---
+  GetInventoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "UseItUp-get-inventory-${EnvironmentName}"
+      Handler: src/functions/get_inventory/app.handler
+      Description: Returns current household inventory
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref AppDataTable
+      Events:
+        GetInventory:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /inventory
+            Method: get
+            RequestParameters:
+              method.request.querystring.household_id: true
+
+  # --- MARK COOKED ---
+  MarkCookedFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "UseItUp-mark-cooked-${EnvironmentName}"
+      Handler: src/functions/mark_cooked/app.handler
+      Description: Deducts ingredients, logs meal
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppDataTable
+      Events:
+        MarkCooked:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /cooked
+            Method: post
+
+  # --- GENERATE RECIPES ---
+  GenerateRecipesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "UseItUp-generate-recipes-${EnvironmentName}"
+      Handler: src/functions/generate_recipes/app.handler
+      Description: AI recipe generation constrained to inventory
+      Timeout: 90
+      MemorySize: 1024
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref AppDataTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+      Events:
+        GenerateRecipes:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /recipes/generate
+            Method: post
+
+  # --- GET NUTRITION SUMMARY ---
+  GetNutritionSummaryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "UseItUp-get-nutrition-summary-${EnvironmentName}"
+      Handler: src/functions/get_nutrition_summary/app.handler
+      Description: Daily macro totals vs targets
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref AppDataTable
+      Events:
+        GetNutritionSummary:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /nutrition
+            Method: get
+            RequestParameters:
+              method.request.querystring.household_id: true
+
+  # --- UPDATE PROFILE ---
+  UpdateProfileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "UseItUp-update-profile-${EnvironmentName}"
+      Handler: src/functions/update_profile/app.handler
+      Description: Updates household profile settings
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppDataTable
+      Events:
+        UpdateProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /profile
+            Method: put
+
+  # --- EXPIRY CHECK CRON ---
+  ExpiryCheckCronFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "UseItUp-expiry-check-cron-${EnvironmentName}"
+      Handler: src/functions/expiry_check_cron/app.handler
+      Description: Daily cron to scan expiring items and send SNS notifications
+      Timeout: 300
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref AppDataTable
+        - SNSPublishMessagePolicy:
+            TopicArn: !Ref ExpiryNotificationsTopic
+      Events:
+        ScheduledCheck:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 day)
+            Description: Daily expiry check at 7 AM IST
+            Enabled: true
+
+  # ============================================
+  # EVENTBRIDGE RULE (expiry check, 7 AM IST)
+  # ============================================
+  ExpiryCheckScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "UseItUp-expiry-check-${EnvironmentName}"
+      ScheduleExpression: "cron(30 1 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ExpiryCheckCronFunction.Arn
+          Id: ExpiryCheckCronTarget
+
+  ExpiryCheckSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ExpiryCheckCronFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ExpiryCheckScheduleRule.Arn
+
+# ============================================
+# OUTPUTS
+# ============================================
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}/"
+
+  TableName:
+    Description: DynamoDB table name
+    Value: !Ref AppDataTable
+
+  BucketName:
+    Description: S3 upload bucket name
+    Value: !Ref UploadBucket
+
+  SnsTopicArn:
+    Description: SNS topic ARN for expiry notifications
+    Value: !Ref ExpiryNotificationsTopic

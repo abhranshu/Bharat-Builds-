@@ -1,0 +1,35 @@
+{
+  "Records": [
+    {
+      "eventVersion": "2.1",
+      "eventSource": "aws:s3",
+      "awsRegion": "us-east-1",
+      "eventTime": "2025-01-15T10:30:00.000Z",
+      "eventName": "ObjectCreated:Put",
+      "userIdentity": {
+        "principalId": "AIDAEXAMPLE"
+      },
+      "requestParameters": {
+        "sourceIPAddress": "127.0.0.1"
+      },
+      "responseElements": {
+        "x-amz-request-id": "EXAMPLE-REQUEST-ID",
+        "x-amz-id-2": "EXAMPLE-ID-2"
+      },
+      "s3": {
+        "s3SchemaVersion": "1.0",
+        "configurationId": "IngestBillNotification",
+        "bucket": {
+          "name": "useitup-uploads-dev-123456789012",
+          "arn": "arn:aws:s3:::useitup-uploads-dev-123456789012"
+        },
+        "object": {
+          "key": "uploads/hh-test123/bill_abc123_20250115103000.jpg",
+          "size": 245760,
+          "eTag": "d41d8cd98f00b204e9800998ecf8427e",
+          "sequencer": "0061F2A1D7E4C"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,269 @@
+"""AI recipe generation constrained to household inventory.
+
+Flow:
+1. Query all ITEM# records for the household (sorted by expiry)
+2. Query PROFILE for diet constraints
+3. Query today's COOKED# records for remaining nutrition gap
+4. Build Bedrock prompt with ingredients, constraints, and gap
+5. Parse structured recipe output
+6. Run deterministic nutrition_calculator on each recipe
+7. Return recipes with "why this" reasons
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import date, datetime
+from typing import Any
+
+from src.shared import dynamo_client
+from src.shared.constants import (
+    PK_PREFIX_HOUSEHOLD,
+    SK_PREFIX_ITEM,
+    SK_PREFIX_COOKED,
+    SK_PREFIX_PROFILE,
+    SK_META,
+)
+from src.shared.ingredient_catalog import get_canonical_name
+from src.shared.bedrock_client import invoke_claude_json
+from src.shared.nutrition_calculator import calculate_recipe_nutrition
+from src.shared.models import (
+    GenerateRecipesRequest,
+    GenerateRecipesResponse,
+    Recipe,
+    RecipeIngredient,
+    NutritionInfo,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def handler(event, context):
+    """Lambda handler for POST /recipes/generate."""
+    try:
+        body = json.loads(event.get("body", "{}"))
+        request = GenerateRecipesRequest(**body)
+
+        # Step 1: Get household inventory
+        pk = f"{PK_PREFIX_HOUSEHOLD}{request.household_id}"
+        items = dynamo_client.query_items(pk=pk, sk_prefix=SK_PREFIX_ITEM)
+
+        if not items:
+            return {
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({
+                    "household_id": request.household_id,
+                    "recipes": [],
+                    "message": "No ingredients in inventory. Upload a bill or fridge photo first.",
+                }),
+            }
+
+        # Sort by expiry (soonest first)
+        items.sort(key=lambda x: x.get("predicted_expiry", "9999"))
+
+        # Build ingredient list for prompt
+        ingredient_list = []
+        for item in items:
+            ingredient_list.append({
+                "ingredient_id": item["ingredient_id"],
+                "name": get_canonical_name(item["ingredient_id"]),
+                "quantity_g": item.get("quantity_g", 0),
+                "days_until_expiry": item.get("days_until_expiry", "unknown"),
+            })
+
+        # Step 2: Get profile
+        profile = dynamo_client.get_item(
+            pk=pk, sk=SK_PREFIX_PROFILE
+        ) or {}
+
+        diet_type = profile.get("diet_type", "vegetarian")
+        daily_calorie_target = profile.get("daily_calorie_target", 2000)
+        daily_protein_target = profile.get("daily_protein_target", 60)
+
+        # Step 3: Get today's cooked records and compute gap
+        today_iso = date.today().isoformat()
+        cooked_records = dynamo_client.query_items(
+            pk=pk,
+            sk_prefix=f"{SK_PREFIX_COOKED}{today_iso}",
+        )
+
+        consumed_calories = sum(
+            r.get("nutrition_totals", {}).get("calories", 0)
+            for r in cooked_records
+        )
+        consumed_protein = sum(
+            r.get("nutrition_totals", {}).get("protein", 0)
+            for r in cooked_records
+        )
+
+        remaining_calories = max(0, daily_calorie_target - consumed_calories)
+        remaining_protein = max(0, daily_protein_target - consumed_protein)
+
+        # Step 4: Build Bedrock prompt
+        prompt = _build_recipe_prompt(
+            ingredients=ingredient_list,
+            diet_type=diet_type,
+            meal_type=request.meal_type.value,
+            prep_time_limit=request.prep_time_preference,
+            remaining_calories=remaining_calories,
+            remaining_protein=remaining_protein,
+        )
+
+        # Step 5: Get structured recipes from Bedrock
+        raw_recipes = invoke_claude_json(
+            prompt=prompt,
+            system_prompt=(
+                "You are an Indian home chef and nutritionist. "
+                "Generate practical recipes using ONLY the ingredients provided. "
+                "Prioritize items closest to expiry."
+            ),
+        )
+
+        if not isinstance(raw_recipes, list):
+            raw_recipes = []
+
+        # Step 6: Process recipes and compute deterministic nutrition
+        recipes = []
+        for raw in raw_recipes[:3]:  # Max 3 recipes
+            recipe_ingredients = []
+            for ing in raw.get("ingredients", []):
+                recipe_ingredients.append(RecipeIngredient(
+                    ingredient_id=ing.get("ingredient_id", ""),
+                    name=get_canonical_name(ing.get("ingredient_id", "")),
+                    grams=float(ing.get("grams", 100)),
+                ))
+
+            # Deterministic nutrition calculation (NOT from LLM)
+            servings = raw.get("servings", 2)
+            nutrition = calculate_recipe_nutrition(
+                ingredients=[
+                    {"ingredient_id": ri.ingredient_id, "grams": ri.grams}
+                    for ri in recipe_ingredients
+                ],
+                servings=servings,
+            )
+
+            recipe = Recipe(
+                name=raw.get("name", "Unnamed Recipe"),
+                ingredients=recipe_ingredients,
+                steps=raw.get("steps", []),
+                prep_time_minutes=raw.get("prep_time_minutes", 30),
+                servings=servings,
+                nutrition_per_serving=NutritionInfo(**nutrition),
+                reason=_generate_reason(raw, ingredient_list),
+            )
+            recipes.append(recipe)
+
+        # Step 7: Build nutrition gap info
+        total_recipe_cal = sum(
+            r.nutrition_per_serving.calories * r.servings
+            for r in recipes
+        )
+        total_recipe_protein = sum(
+            r.nutrition_per_serving.protein * r.servings
+            for r in recipes
+        )
+
+        nutrition_gap = NutritionInfo(
+            calories=round(remaining_calories - total_recipe_cal, 1),
+            protein=round(remaining_protein - total_recipe_protein, 1),
+        )
+
+        response = GenerateRecipesResponse(
+            household_id=request.household_id,
+            recipes=recipes,
+            nutrition_gap=nutrition_gap,
+        )
+
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": response.model_dump_json(),
+        }
+
+    except Exception as exc:
+        logger.error("Error generating recipes: %s", exc)
+        return {
+            "statusCode": 500,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({
+                "error": "Internal server error",
+                "detail": str(exc),
+                "status_code": 500,
+            }),
+        }
+
+
+def _build_recipe_prompt(
+    ingredients: list[dict],
+    diet_type: str,
+    meal_type: str,
+    prep_time_limit: int,
+    remaining_calories: float,
+    remaining_protein: float,
+) -> str:
+    """Build the Bedrock prompt for recipe generation."""
+    ingredients_text = "\n".join(
+        f"- {ing['name']} ({ing['ingredient_id']}): {ing['quantity_g']}g, "
+        f"expires in {ing.get('days_until_expiry', '?')} days"
+        for ing in ingredients
+    )
+
+    return f"""Generate 2-3 recipes for a {diet_type} {meal_type}.
+
+AVAILABLE INGREDIENTS (sorted by expiry — prioritize soonest-expiring):
+{ingredients_text}
+
+CONSTRAINTS:
+- Diet type: {diet_type}
+- Maximum prep time: {prep_time_limit} minutes
+- Servings: 2
+- Remaining daily calories needed: {remaining_calories} kcal
+- Remaining daily protein needed: {remaining_protein}g
+- Use ONLY the ingredients listed above
+- Prioritize ingredients that expire soonest
+- Recipes should be practical Indian home cooking
+
+Return a JSON array of recipes. Each recipe must have:
+- "name": recipe name (in English)
+- "ingredients": array of {{"ingredient_id": "...", "grams": number}}
+- "steps": array of step-by-step cooking instructions
+- "prep_time_minutes": estimated prep time
+- "servings": number of servings (default 2)
+
+Return ONLY the JSON array, nothing else."""
+
+
+def _generate_reason(raw_recipe: dict, ingredient_list: list[dict]) -> str:
+    """Generate a 'why this recipe' reason string."""
+    used_ids = {
+        ing.get("ingredient_id") for ing in raw_recipe.get("ingredients", [])
+    }
+
+    # Find soonest-expiring ingredient used
+    expiring_soon = None
+    for item in ingredient_list:
+        if item["ingredient_id"] in used_ids:
+            days = item.get("days_until_expiry", "unknown")
+            if isinstance(days, (int, float)):
+                if days <= 3:
+                    expiring_soon = item
+                    break
+
+    parts = []
+    if expiring_soon:
+        parts.append(
+            f"Uses your {expiring_soon['name']} "
+            f"expiring in {expiring_soon['days_until_expiry']} days"
+        )
+
+    total_grams = sum(
+        ing.get("grams", 0)
+        for ing in raw_recipe.get("ingredients", [])
+    )
+    if total_grams > 0:
+        parts.append(f"Uses {int(total_grams)}g from your fridge")
+
+    return ". ".join(parts) if parts else "A delicious recipe from your ingredients"

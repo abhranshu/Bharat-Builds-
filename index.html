@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
+  <title>Bharat Build - Scroll Animation</title>
+
+  <!-- Main CSS -->
+  <link
+    rel="stylesheet"
+    href="./style.css"
+  >
+</head>
+
+<body>
+
+  <!-- ============================================
+       HERO SECTION
+       ============================================ -->
+
+  <section
+    id="hero-section"
+    style="
+      height: 100vh;
+      position: relative;
+      overflow: hidden;
+    "
+  >
+
+    <!-- Canvas for scroll animation -->
+    <canvas id="hero-canvas"></canvas>
+
+
+    <!-- Loading Screen -->
+    <div
+      id="loader"
+      style="
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10;
+      "
+    >
+      <span id="loader-text">
+        Loading 0%
+      </span>
+    </div>
+
+  </section>
+
+
+  <!-- ============================================
+       GSAP
+       ============================================ -->
+
+  <script
+    src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
+  ></script>
+
+
+  <!-- ============================================
+       GSAP SCROLLTRIGGER
+       ============================================ -->
+
+  <script
+    src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
+  ></script>
+
+
+  <!-- ============================================
+       YOUR JAVASCRIPT
+       ============================================ -->
+
+  <script src="./script.js"></script>
+
+</body>
+
+</html>
