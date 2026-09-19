@@ -1,0 +1,8 @@
+# Dependencies bundled into CommonDepsLayer (ContentUri: layer/).
+#
+# `sam build` installs these into this layer's python/ directory, which is
+# mounted at /opt in every Lambda. Keep this in sync with requirements.txt.
+#
+# boto3 is NOT listed here: the Python 3.12 Lambda runtime already provides it,
+# and duplicating it would add ~100 MB to the layer for no benefit.
+pydantic>=2.9.0,<3.0.0

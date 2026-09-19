@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .ingredient_catalog import get_macros_per_100g, get_catalog_item
+from .ingredient_catalog import get_macros_per_100g
 
 
 def calculate_ingredient_nutrition(
@@ -37,11 +37,14 @@ def calculate_ingredient_nutrition(
     }
 
 
-def calculate_recipe_nutrition(
+def calculate_nutrition(
     ingredients: list[dict[str, Any]],
     servings: int = 2,
 ) -> dict[str, float]:
-    """Calculate total and per-serving nutrition for a recipe.
+    """Calculate per-serving nutrition for a recipe's ingredients.
+
+    Sums calories/protein/carbs/fat/fiber from the catalog's per-100g values
+    scaled by grams, then divides by servings.
 
     Args:
         ingredients: List of {"ingredient_id": str, "grams": float}.
@@ -76,6 +79,10 @@ def calculate_recipe_nutrition(
             totals[key] = round(totals[key] / servings, 1)
 
     return totals
+
+
+# Backwards-compatible alias used by the existing Lambda functions.
+calculate_recipe_nutrition = calculate_nutrition
 
 
 def calculate_daily_totals(

@@ -95,7 +95,7 @@ All infrastructure is defined in `template.yaml` (AWS SAM).
 TABLE_NAME       → UseItUp-dev
 BUCKET_NAME      → useitup-uploads-dev-ACCOUNT_ID
 SNS_TOPIC_ARN    → arn:aws:sns:us-east-1:ACCOUNT:UseItUp-expiry-nudges-dev
-BEDROCK_MODEL_ID → anthropic.claude-sonnet-4-20250514-v1:0
+BEDROCK_MODEL_ID → global.amazon.nova-2-lite-v1:0
 AWS_REGION       → us-east-1
 ```
 
@@ -213,7 +213,7 @@ CAT#<ingredient_id>        META                   Catalog entry (canonical data)
   "status": "processed",
   "upload_type": "bill",
   "household_id": "abc123",
-  "s3_key": "uploads/abc123/bill_img_xyz789_20250115103000.jpg",
+  "s3_key": "uploads/abc123/img_xyz789_20250115103000_bill.jpg",
   "item_count": 8,
   "processed_at": "2025-01-15T10:31:00",
   "raw_output": { ... }
@@ -291,7 +291,7 @@ DeleteItem(PK=HH#abc123, SK=ITEM#tomato_xyz789)
 **What happens:**
 1. Validates input with Pydantic (`GetUploadUrlRequest`)
 2. Generates a unique `image_id` (UUID, 12 chars)
-3. Builds S3 key: `uploads/{household_id}/{prefix}{image_id}_{timestamp}.jpg`
+3. Builds S3 key: `uploads/{household_id}/{image_id}_{timestamp}_{bill|fridge}.jpg`
 4. Generates presigned PUT URL (1 hour TTL)
 5. Writes `UPLOAD#` record to DynamoDB with `status: "pending"`
 6. Returns `{upload_url, image_id, expires_in}`
@@ -299,7 +299,7 @@ DeleteItem(PK=HH#abc123, SK=ITEM#tomato_xyz789)
 **Response:**
 ```json
 {
-  "upload_url": "https://useitup-uploads-dev-xxx.s3.amazonaws.com/uploads/abc123/bill_img123_20250115103000.jpg?X-Amz-...",
+  "upload_url": "https://useitup-uploads-dev-xxx.s3.amazonaws.com/uploads/abc123/img123_20250115103000_bill.jpg?X-Amz-...",
   "image_id": "img123",
   "expires_in": 3600
 }
@@ -379,7 +379,7 @@ DeleteItem(PK=HH#abc123, SK=ITEM#tomato_xyz789)
    - Prep time limit
    - Remaining nutrition gap
    - Instruction to prioritize soonest-expiring items
-6. **Invoke Bedrock** — Claude generates 2-3 recipes as structured JSON
+6. **Invoke Bedrock** — Nova 2 Lite generates 2-3 recipes as structured JSON
 7. **Parse response** — validates JSON, extracts recipe objects
 8. **Calculate nutrition deterministically** — for each recipe, uses `nutrition_calculator.py` with IFCT data (NOT the LLM's output)
 9. **Generate "why this" reasons** — templated strings like "Uses your coriander expiring in 2 days"
@@ -572,7 +572,8 @@ Input → Validate with Pydantic → Generate UUID → Build S3 key
 ```
 
 **Key details:**
-- S3 key pattern: `uploads/{household_id}/{bill_|fridge_}{uuid}_{timestamp}.jpg`
+- S3 key pattern: `uploads/{household_id}/{uuid}_{timestamp}_{bill|fridge}.jpg`
+  (the type is a filename suffix, since S3 event filters only support prefix/suffix rules)
 - Presigned URL TTL: 1 hour (3600 seconds)
 - The UPLOAD# record starts as `status: "pending"` and is updated to `"processed"` by the ingest functions
 
@@ -580,7 +581,7 @@ Input → Validate with Pydantic → Generate UUID → Build S3 key
 
 ### ingest_bill (`src/functions/ingest_bill/app.py`)
 
-**Trigger:** S3 ObjectCreated event on `uploads/*/bill_*.jpg`
+**Trigger:** S3 ObjectCreated event on `uploads/*/*_bill.jpg`
 
 ```
 S3 event → Download image → Textract AnalyzeExpense
@@ -597,7 +598,7 @@ S3 event → Download image → Textract AnalyzeExpense
 - Line items: {name, quantity, price, unit_price}
 
 **Bedrock normalization prompt:**
-The prompt includes the full catalog of valid `ingredient_id`s. Claude maps raw bill strings like "TOMATO 500G" to `{"ingredient_id": "tomato", "quantity_g": 500}`. It can only use IDs from the catalog — it cannot invent new ones.
+The prompt includes the full catalog of valid `ingredient_id`s. Nova 2 Lite maps raw bill strings like "TOMATO 500G" to `{"ingredient_id": "tomato", "quantity_g": 500}`. It can only use IDs from the catalog — it cannot invent new ones.
 
 **Expiry prediction:**
 - Purchase date comes from Textract's transaction date
@@ -609,7 +610,7 @@ The prompt includes the full catalog of valid `ingredient_id`s. Claude maps raw 
 
 ### ingest_fridge_photo (`src/functions/ingest_fridge_photo/app.py`)
 
-**Trigger:** S3 ObjectCreated event on `uploads/*/fridge_*.jpg`
+**Trigger:** S3 ObjectCreated event on `uploads/*/*_fridge.jpg`
 
 ```
 S3 event → Download image → Bedrock Vision (image + prompt)
@@ -660,7 +661,7 @@ Rules:
 7. Return recipes with nutrition_per_serving
 ```
 
-**The prompt sent to Claude:**
+**The prompt sent to Nova 2 Lite:**
 ```
 Generate 2-3 recipes for a vegetarian lunch.
 
@@ -688,7 +689,7 @@ Return ONLY the JSON array.
 ```
 
 **Why nutrition is calculated separately:**
-The prompt asks Claude to list ingredients with quantities. Then `nutrition_calculator.py` computes macros from IFCT data. This separation ensures:
+The prompt asks Nova 2 Lite to list ingredients with quantities. Then `nutrition_calculator.py` computes macros from IFCT data. This separation ensures:
 - Nutrition is deterministic (same inputs → same output)
 - No LLM hallucination on calorie counts
 - IFCT data is authoritative for Indian ingredients
@@ -849,11 +850,18 @@ Wraps boto3 DynamoDB calls with serialization helpers.
 
 ### `bedrock_client.py` — AI Model Invocations
 
+Uses the Bedrock Runtime **Converse API** with **Amazon Nova 2 Lite**
+(`BEDROCK_MODEL_ID`, injected via Lambda environment variables). The Converse
+API gives one request/response shape for text and multimodal input, so no
+model-specific request bodies are built.
+
 | Function | Purpose |
 |----------|---------|
-| `invoke_claude(prompt)` | Basic text completion |
-| `invoke_claude_json(prompt)` | Text completion with strict JSON parsing + retry |
-| `invoke_claude_vision(image_bytes)` | Image + text input (for fridge photos) |
+| `invoke_bedrock(prompt, force_json=True)` | Text input, JSON output with strict parsing + retry |
+| `invoke_bedrock_vision(image_bytes, prompt)` | Multimodal image + text input (for fridge photos) |
+
+Token budgets are deliberately small (`maxTokens` 2048 for text, 1024 for
+vision) since responses are compact JSON payloads.
 
 **JSON parsing retry logic:**
 1. Send prompt with "respond with valid JSON only" system prompt
@@ -886,7 +894,7 @@ Wraps boto3 DynamoDB calls with serialization helpers.
 ### `ingredient_catalog.py` — Ingredient Data
 
 **Two sources:**
-1. **Static catalog** (`STATIC_CATALOG`): 20 Indian ingredients with IFCT macros, hardcoded as Python dicts
+1. **Static catalog** (`STATIC_CATALOG`): 22 Indian kitchen ingredients with IFCT macros, hardcoded as a dict keyed by `ingredient_id` (used directly, no DynamoDB load required)
 2. **DynamoDB catalog**: Same data loaded into DynamoDB via `seed_dynamo.py`
 
 **Lookup functions:**
@@ -947,7 +955,7 @@ per_serving = total / servings
 
 ## 7. AI Integration
 
-### Bedrock (Claude) — Used for:
+### Bedrock (Nova 2 Lite) — Used for:
 1. **Bill normalization** — mapping raw Textract strings to catalog IDs
 2. **Fridge photo analysis** — identifying ingredients from images
 3. **Recipe generation** — creating constrained recipes
@@ -1005,7 +1013,7 @@ def handler(event, context):
 ### Bedrock error handling
 
 ```python
-# invoke_claude_json:
+# invoke_bedrock:
 1. Send prompt
 2. Parse response
 3. If JSON fails → retry once with stricter prompt

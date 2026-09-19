@@ -39,7 +39,7 @@ def seed_catalog(table_name: str, endpoint_url: str | None = None) -> int:
     table = dynamodb.Table(table_name)
 
     count = 0
-    for item in STATIC_CATALOG:
+    for item in STATIC_CATALOG.values():
         ingredient_id = item["ingredient_id"]
         pk = f"CAT#{ingredient_id}"
         sk = "META"

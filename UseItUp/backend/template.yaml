@@ -15,10 +15,9 @@ Globals:
     Environment:
       Variables:
         TABLE_NAME: !Ref AppDataTable
-        BUCKET_NAME: !Ref UploadBucket
+        BUCKET_NAME: !Sub "useitup-uploads-${EnvironmentName}-${AWS::AccountId}"
         SNS_TOPIC_ARN: !Ref ExpiryNotificationsTopic
-        BEDROCK_MODEL_ID: anthropic.claude-sonnet-4-20250514-v1:0
-        AWS_LAMBDA_EXEC_WRAPPER: /opt/python/bin/plex
+        BEDROCK_MODEL_ID: global.amazon.nova-2-lite-v1:0
     Layers:
       - !Ref CommonDepsLayer
 
@@ -88,6 +87,21 @@ Resources:
           - Id: expire-old-uploads
             Status: Enabled
             ExpirationInDays: 30
+      # Allows the browser to PUT directly to the presigned upload URL.
+      # Without this the preflight request fails and uploads never happen.
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - PUT
+              - GET
+              - HEAD
+            AllowedOrigins:
+              - "*"
+            ExposedHeaders:
+              - ETag
+            MaxAge: 3000
       Tags:
         - Key: Project
           Value: UseItUp
@@ -132,45 +146,13 @@ Resources:
         - arm64
 
   # ============================================
-  # LAMBDA PERMISSIONS (S3 triggers)
+  # S3 TRIGGERS
   # ============================================
-  IngestBillPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt IngestBillFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: s3.amazonaws.com
-      SourceAccount: !Ref AWS::AccountId
-      SourceArn: !Ref UploadBucket
-
-  IngestFridgePhotoPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt IngestFridgePhotoFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: s3.amazonaws.com
-      SourceAccount: !Ref AWS::AccountId
-      SourceArn: !Ref UploadBucket
-
-  # ============================================
-  # S3 NOTIFICATION RULES
-  # ============================================
-  BillUploadNotification:
-    Type: AWS::S3::Bucket
-    DependsOn: IngestBillPermission
-    Properties:
-      BucketName: !Sub "useitup-uploads-${EnvironmentName}-${AWS::AccountId}"
-      NotificationConfiguration:
-        LambdaConfigurations:
-          - Event: s3:ObjectCreated:*
-            Function: !GetAtt IngestBillFunction.Arn
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: uploads/
-                  - Name: suffix
-                    Value: .jpg
+  # S3 notifications are declared as `Events` on IngestBillFunction and
+  # IngestFridgePhotoFunction below. SAM creates the bucket notification and
+  # the required Lambda::Permission for us, so neither is declared here.
+  # (A second AWS::S3::Bucket resource with the same BucketName as UploadBucket
+  # previously collided and made the stack fail to deploy.)
 
   # ============================================
   # API GATEWAY
@@ -198,7 +180,7 @@ Resources:
       Description: Generates presigned S3 PUT URL for image upload
       Policies:
         - S3CrudPolicy:
-            BucketName: !Ref UploadBucket
+            BucketName: !Sub "useitup-uploads-${EnvironmentName}-${AWS::AccountId}"
         - DynamoDBCrudPolicy:
             TableName: !Ref AppDataTable
       Events:
@@ -220,7 +202,7 @@ Resources:
       MemorySize: 1024
       Policies:
         - S3ReadPolicy:
-            BucketName: !Ref UploadBucket
+            BucketName: !Sub "useitup-uploads-${EnvironmentName}-${AWS::AccountId}"
         - DynamoDBCrudPolicy:
             TableName: !Ref AppDataTable
         - Statement:
@@ -242,10 +224,12 @@ Resources:
             Filter:
               S3Key:
                 Rules:
+                  # Type lives in the suffix so bills and fridge photos can be
+                  # routed to separate functions without double invocation.
                   - Name: prefix
                     Value: uploads/
                   - Name: suffix
-                    Value: .jpg
+                    Value: _bill.jpg
 
   # --- INGEST FRIDGE PHOTO (S3-triggered) ---
   IngestFridgePhotoFunction:
@@ -258,7 +242,7 @@ Resources:
       MemorySize: 1024
       Policies:
         - S3ReadPolicy:
-            BucketName: !Ref UploadBucket
+            BucketName: !Sub "useitup-uploads-${EnvironmentName}-${AWS::AccountId}"
         - DynamoDBCrudPolicy:
             TableName: !Ref AppDataTable
         - Statement:
@@ -278,7 +262,7 @@ Resources:
                   - Name: prefix
                     Value: uploads/
                   - Name: suffix
-                    Value: .jpg
+                    Value: _fridge.jpg
 
   # --- GET INVENTORY ---
   GetInventoryFunction:
@@ -393,14 +377,9 @@ Resources:
         - DynamoDBReadPolicy:
             TableName: !Ref AppDataTable
         - SNSPublishMessagePolicy:
-            TopicArn: !Ref ExpiryNotificationsTopic
-      Events:
-        ScheduledCheck:
-          Type: Schedule
-          Properties:
-            Schedule: rate(1 day)
-            Description: Daily expiry check at 7 AM IST
-            Enabled: true
+            # The SAM policy template parameter is TopicName (not TopicArn), and
+            # it wants the topic NAME — !Ref returns the ARN, so use GetAtt.
+            TopicName: !GetAtt ExpiryNotificationsTopic.TopicName
 
   # ============================================
   # EVENTBRIDGE RULE (expiry check, 7 AM IST)

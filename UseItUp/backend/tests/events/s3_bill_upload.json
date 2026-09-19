@@ -24,7 +24,7 @@
           "arn": "arn:aws:s3:::useitup-uploads-dev-123456789012"
         },
         "object": {
-          "key": "uploads/hh-test123/bill_abc123_20250115103000.jpg",
+          "key": "uploads/hh-test123/abc123_20250115103000_bill.jpg",
           "size": 245760,
           "eTag": "d41d8cd98f00b204e9800998ecf8427e",
           "sequencer": "0061F2A1D7E4C"

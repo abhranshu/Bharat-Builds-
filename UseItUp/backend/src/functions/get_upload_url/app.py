@@ -10,9 +10,16 @@ from datetime import datetime, timedelta
 
 import boto3
 
-from src.shared.constants import BUCKET_NAME, SK_PREFIX_UPLOAD, PK_PREFIX_HOUSEHOLD
+from src.shared.constants import (
+    BUCKET_NAME,
+    SK_PREFIX_UPLOAD,
+    PK_PREFIX_HOUSEHOLD,
+    UPLOAD_TAG_BILL,
+    UPLOAD_TAG_FRIDGE,
+)
 from src.shared.dynamo_client import put_item
 from src.shared.models import GetUploadUrlRequest, GetUploadUrlResponse
+
 
 logger = logging.getLogger(__name__)
 
@@ -20,24 +27,62 @@ _s3 = boto3.client("s3")
 
 
 def handler(event, context):
-    """Lambda handler for GET /upload-url."""
+    """Lambda handler for POST /upload-url."""
+
     try:
-        body = json.loads(event.get("body", "{}"))
+        # API Gateway normally provides the request body as a JSON string.
+        # Some direct Lambda invocations/tests may provide it as a dict.
+        raw_body = event.get("body")
+
+        if raw_body is None:
+            return {
+                "statusCode": 400,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": json.dumps({
+                    "error": "Request body is required"
+                }),
+            }
+
+        # Handle both API Gateway string bodies and direct Lambda dict bodies.
+        if isinstance(raw_body, dict):
+            body = raw_body
+        else:
+            body = json.loads(raw_body)
+
+        if not isinstance(body, dict):
+            return {
+                "statusCode": 400,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": json.dumps({
+                    "error": "Request body must be a JSON object"
+                }),
+            }
+
+        # Validate request using Pydantic model.
         request = GetUploadUrlRequest(**body)
 
-        # Generate unique image ID
+        # Generate unique image ID.
         image_id = str(uuid.uuid4())[:12]
         timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
-        # Build S3 key
+        # Build S3 key.
+        # The upload type goes in the filename suffix so the S3
+        # ObjectCreated notifications can filter on it.
         if request.upload_type.value == "bill":
-            prefix = "bill_"
+            tag = UPLOAD_TAG_BILL
         else:
-            prefix = "fridge_"
+            tag = UPLOAD_TAG_FRIDGE
 
-        s3_key = f"uploads/{request.household_id}/{prefix}{image_id}_{timestamp}.jpg"
+        s3_key = (
+            f"uploads/{request.household_id}/"
+            f"{image_id}_{timestamp}_{tag}.jpg"
+        )
 
-        # Generate presigned PUT URL (1 hour TTL)
+        # Generate presigned PUT URL (1 hour TTL).
         presigned_url = _s3.generate_presigned_url(
             "put_object",
             Params={
@@ -48,7 +93,7 @@ def handler(event, context):
             ExpiresIn=3600,
         )
 
-        # Write UPLOAD# record to DynamoDB
+        # Write UPLOAD# record to DynamoDB.
         pk = f"{PK_PREFIX_HOUSEHOLD}{request.household_id}"
         sk = f"{SK_PREFIX_UPLOAD}{image_id}"
 
@@ -79,15 +124,38 @@ def handler(event, context):
 
         return {
             "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
+            "headers": {
+                "Content-Type": "application/json"
+            },
             "body": response.model_dump_json(),
         }
 
+    except json.JSONDecodeError as exc:
+        logger.warning("Invalid JSON request body: %s", exc)
+
+        return {
+            "statusCode": 400,
+            "headers": {
+                "Content-Type": "application/json"
+            },
+            "body": json.dumps({
+                "error": "Invalid JSON request body",
+                "detail": str(exc),
+                "status_code": 400,
+            }),
+        }
+
     except Exception as exc:
-        logger.error("Error generating upload URL: %s", exc)
+        logger.exception(
+            "Error generating upload URL: %s",
+            exc
+        )
+
         return {
             "statusCode": 500,
-            "headers": {"Content-Type": "application/json"},
+            "headers": {
+                "Content-Type": "application/json"
+            },
             "body": json.dumps({
                 "error": "Internal server error",
                 "detail": str(exc),

@@ -85,7 +85,7 @@
       <div class="app-header">
         <span class="app-entry-badge">
           <span class="badge-dot"></span>
-          Coming Soon
+          Live Demo
         </span>
         <h2 class="app-entry-title">Ready to <em>Use It Up</em>?</h2>
         <p class="app-entry-desc">
@@ -165,14 +165,160 @@
 
       <!-- CTA -->
       <div class="app-entry-cta-row">
-        <a href="#" class="app-entry-cta">
-          <span>Get Early Access</span>
+        <a href="#app-console" class="app-entry-cta">
+          <span>Open App Console</span>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="5" y1="12" x2="19" y2="12"></line>
             <polyline points="12 5 19 12 12 19"></polyline>
           </svg>
         </a>
         <span class="app-entry-note">Free during beta</span>
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ============================================
+       APP CONSOLE — backend-connected control room
+       (Independent of the hero scroll sequence)
+       ============================================ -->
+  <section id="app-console">
+    <div class="console-inner">
+
+      <header class="console-header">
+        <span class="console-eyebrow">App Console</span>
+        <h2 class="console-title">Use<span>ItUp</span> Control Room</h2>
+        <p class="console-desc">
+          Point this at your deployed API, then upload a grocery bill or a fridge
+          photo and drive the whole pipeline — inventory, recipes, nutrition — from here.
+        </p>
+      </header>
+
+
+      <!-- 1 · Connection -->
+      <div class="console-panel">
+        <div class="console-panel-head">
+          <h3>1 · Connection</h3>
+        </div>
+
+        <div class="console-row">
+          <label class="field">
+            <span>Household ID</span>
+            <input id="household-id" type="text" placeholder="hh-demo" autocomplete="off">
+          </label>
+
+          <label class="field">
+            <span>API Base URL</span>
+            <input id="api-base" type="url" placeholder="https://xxxx.execute-api.ap-south-1.amazonaws.com/dev">
+          </label>
+
+          <button id="btn-save-connection" class="btn btn-primary" type="button">Save</button>
+        </div>
+
+        <p id="connection-status" class="console-status"></p>
+      </div>
+
+
+      <!-- 2 · Capture -->
+      <div class="console-panel">
+        <div class="console-panel-head">
+          <h3>2 · Capture</h3>
+        </div>
+
+        <div class="button-grid">
+          <button id="btn-upload-bill" class="btn btn-primary" type="button">Upload Grocery Bill</button>
+          <button id="btn-upload-fridge" class="btn btn-ghost" type="button">Upload Fridge Photo</button>
+        </div>
+
+        <input id="file-input" type="file" accept="image/*" hidden>
+
+        <p class="console-hint">
+          Bill &rarr; Textract line items. Fridge photo &rarr; Nova 2 Lite vision.
+        </p>
+      </div>
+
+
+      <!-- 3 · Inventory, recipes & nutrition -->
+      <div class="console-panel">
+        <div class="console-panel-head">
+          <h3>3 · Kitchen</h3>
+        </div>
+
+        <div class="button-grid">
+          <button id="btn-inventory" class="btn btn-ghost" type="button">Refresh Inventory</button>
+          <button id="btn-nutrition" class="btn btn-ghost" type="button">Nutrition Summary</button>
+          <button id="btn-regenerate" class="btn btn-primary" type="button">Generate Recipes</button>
+        </div>
+
+        <div class="console-row">
+          <label class="field field-inline">
+            <span>Meal</span>
+            <select id="meal-type">
+              <option value="breakfast">Breakfast</option>
+              <option value="lunch" selected>Lunch</option>
+              <option value="dinner">Dinner</option>
+              <option value="snack">Snack</option>
+            </select>
+          </label>
+
+          <label class="field field-inline">
+            <span>Max prep (min)</span>
+            <input id="prep-time" type="number" min="5" max="120" value="30">
+          </label>
+        </div>
+
+        <div id="recipes-results"></div>
+        <div id="inventory-results"></div>
+        <div id="nutrition-results"></div>
+      </div>
+
+
+      <!-- 4 · Profile -->
+      <div class="console-panel">
+        <div class="console-panel-head">
+          <h3>4 · Household Profile</h3>
+        </div>
+
+        <div class="console-row">
+          <label class="field field-inline">
+            <span>Diet</span>
+            <select id="profile-diet">
+              <option value="vegetarian" selected>Vegetarian</option>
+              <option value="vegan">Vegan</option>
+              <option value="non_vegetarian">Non-vegetarian</option>
+              <option value="eggetarian">Eggetarian</option>
+              <option value="jain">Jain</option>
+            </select>
+          </label>
+
+          <label class="field field-inline">
+            <span>Household size</span>
+            <input id="profile-size" type="number" min="1" max="20" value="4">
+          </label>
+
+          <label class="field field-inline">
+            <span>Daily calories</span>
+            <input id="profile-calories" type="number" min="500" step="50" placeholder="2000">
+          </label>
+
+          <label class="field field-inline">
+            <span>Daily protein (g)</span>
+            <input id="profile-protein" type="number" min="10" step="5" placeholder="60">
+          </label>
+
+          <button id="btn-save-profile" class="btn btn-primary" type="button">Save Profile</button>
+        </div>
+      </div>
+
+
+      <!-- Activity log -->
+      <div class="console-log">
+        <div class="console-log-head">
+          <h3>Activity</h3>
+          <button id="btn-clear-log" class="btn btn-tiny" type="button">Clear</button>
+        </div>
+        <div id="console-log-output"></div>
       </div>
 
     </div>

@@ -107,3 +107,14 @@ htmlcov/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+
+# ============================================
+# LOCAL DOCS  (root-level, not committed)
+# ============================================
+# NOTE: these patterns MUST live in this root file.
+# A .gitignore inside UseItUp/ only applies to paths under UseItUp/,
+# so it can never ignore a file at the repo root.
+
+DEPLOYMENT.md
+how to use this project.md

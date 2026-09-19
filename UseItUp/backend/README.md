@@ -26,7 +26,7 @@ User uploads photo → API Gateway → Lambda → S3
 - **API:** API Gateway REST API
 - **Database:** DynamoDB (single-table design)
 - **Storage:** S3 (image uploads)
-- **AI:** Amazon Bedrock (Claude) + Amazon Textract
+- **AI:** Amazon Bedrock (Amazon Nova 2 Lite, Converse API) + Amazon Textract
 - **Scheduling:** EventBridge Scheduler
 - **Notifications:** SNS
 - **Validation:** Pydantic
@@ -42,8 +42,8 @@ User uploads photo → API Gateway → Lambda → S3
 | `POST` | `/recipes/generate` | Generate AI recipes from inventory | API Gateway |
 | `GET` | `/nutrition?household_id=xxx` | Daily nutrition summary | API Gateway |
 | `PUT` | `/profile` | Update household profile | API Gateway |
-| `S3` | `uploads/*/bill_*` | Process grocery bill (Textract) | S3 trigger |
-| `S3` | `uploads/*/fridge_*` | Process fridge photo (Bedrock Vision) | S3 trigger |
+| `S3` | `uploads/*/*_bill.jpg` | Process grocery bill (Textract) | S3 trigger |
+| `S3` | `uploads/*/*_fridge.jpg` | Process fridge photo (Bedrock Vision) | S3 trigger |
 | `EventBridge` | `rate(1 day)` | Daily expiry check + SNS nudge | Schedule |
 
 ## DynamoDB Single-Table Design
@@ -180,7 +180,7 @@ sam list stack-outputs --stack-name UseItUp-dev
 | `TABLE_NAME` | DynamoDB table name | `UseItUp-dev` |
 | `BUCKET_NAME` | S3 upload bucket name | — |
 | `SNS_TOPIC_ARN` | SNS topic for expiry notifications | — |
-| `BEDROCK_MODEL_ID` | Claude model ID | `anthropic.claude-sonnet-4-20250514-v1:0` |
+| `BEDROCK_MODEL_ID` | Bedrock model / inference profile ID (Amazon Nova 2 Lite) | `global.amazon.nova-2-lite-v1:0` |
 
 ## Error Handling
 

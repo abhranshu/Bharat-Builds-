@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Optional
+from urllib.parse import unquote
 
 import boto3
 
@@ -25,9 +26,10 @@ from src.shared.constants import (
     SK_META,
     SK_PREFIX_ITEM,
     SK_PREFIX_UPLOAD,
+    UPLOAD_SUFFIX_BILL,
 )
 from src.shared.textract_client import analyze_expense, TextractExpenseResult
-from src.shared.bedrock_client import invoke_claude_json
+from src.shared.bedrock_client import invoke_bedrock
 from src.shared.ingredient_catalog import get_catalog_for_prompt
 from src.shared.expiry_predictor import predict_expiry
 
@@ -42,18 +44,20 @@ def handler(event, context):
         # Parse S3 event
         record = event["Records"][0]
         bucket = record["s3"]["bucket"]["name"]
-        key = record["s3"]["object"]["key"]
+        # S3 event keys are URL-encoded; decode before parsing.
+        key = unquote(record["s3"]["object"]["key"])
 
-        # Extract household_id and image_id from key
-        # Path: uploads/{household_id}/{prefix}{image_id}_{timestamp}.jpg
-        parts = key.split("/")
-        if len(parts) < 3:
-            logger.error("Invalid S3 key format: %s", key)
-            return {"statusCode": 400}
+        # Defensive check: the S3 notification filters on the _bill.jpg suffix,
+        # but re-verify in case the function is invoked with another object.
+        parsed_key = _parse_bill_key(key)
+        if parsed_key is None:
+            logger.warning("Ignoring non-bill object: %s", key)
+            return {
+                "statusCode": 200,
+                "body": json.dumps({"message": "Ignored: not a bill upload"}),
+            }
 
-        household_id = parts[1]
-        filename = parts[2]
-        image_id = filename.split("_")[1] if "_" in filename else filename
+        household_id, image_id = parsed_key
 
         logger.info("Processing bill upload: household=%s image=%s", household_id, image_id)
 
@@ -165,6 +169,19 @@ def handler(event, context):
         }
 
 
+def _parse_bill_key(key: str) -> Optional[tuple[str, str]]:
+    """Parse an S3 key of the form
+    ``uploads/{household_id}/{image_id}_{timestamp}_bill.jpg``.
+
+    Returns ``(household_id, image_id)``, or ``None`` if the key is not a
+    bill upload (e.g. a fridge photo).
+    """
+    parts = key.split("/")
+    if len(parts) < 3 or not parts[2].endswith(UPLOAD_SUFFIX_BILL):
+        return None
+    return parts[1], parts[2].split("_")[0]
+
+
 def _normalize_items_with_bedrock(raw_items: list[dict]) -> list[dict]:
     """Map raw Textract items to canonical ingredient_ids via Bedrock."""
     catalog_text = get_catalog_for_prompt()
@@ -189,7 +206,7 @@ Rules:
 - Combine duplicate items into a single entry with summed quantities
 - Return ONLY the JSON array, nothing else"""
 
-    result = invoke_claude_json(prompt=prompt)
+    result = invoke_bedrock(prompt=prompt, force_json=True)
 
     if isinstance(result, list):
         return result

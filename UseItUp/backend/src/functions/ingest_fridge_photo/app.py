@@ -15,7 +15,8 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Optional
+from urllib.parse import unquote
 
 import boto3
 
@@ -25,8 +26,9 @@ from src.shared.constants import (
     PK_PREFIX_CATALOG,
     SK_PREFIX_ITEM,
     SK_PREFIX_UPLOAD,
+    UPLOAD_SUFFIX_FRIDGE,
 )
-from src.shared.bedrock_client import invoke_claude_vision
+from src.shared.bedrock_client import invoke_bedrock_vision
 from src.shared.ingredient_catalog import get_catalog_for_prompt
 from src.shared.expiry_predictor import predict_expiry
 
@@ -41,17 +43,23 @@ def handler(event, context):
         # Parse S3 event
         record = event["Records"][0]
         bucket = record["s3"]["bucket"]["name"]
-        key = record["s3"]["object"]["key"]
+        # S3 event keys are URL-encoded; decode before parsing.
+        key = unquote(record["s3"]["object"]["key"])
 
-        # Extract household_id and image_id from key
-        parts = key.split("/")
-        if len(parts) < 3:
-            logger.error("Invalid S3 key format: %s", key)
-            return {"statusCode": 400}
+        # Defensive check: the S3 notification filters on the _fridge.jpg
+        # suffix, but re-verify in case the function is invoked with another
+        # object.
+        parsed_key = _parse_fridge_key(key)
+        if parsed_key is None:
+            logger.warning("Ignoring non-fridge-photo object: %s", key)
+            return {
+                "statusCode": 200,
+                "body": json.dumps(
+                    {"message": "Ignored: not a fridge photo"}
+                ),
+            }
 
-        household_id = parts[1]
-        filename = parts[2]
-        image_id = filename.split("_")[1] if "_" in filename else filename
+        household_id, image_id = parsed_key
 
         logger.info("Processing fridge photo: household=%s image=%s", household_id, image_id)
 
@@ -78,8 +86,9 @@ Rules:
 - Estimate quantity realistically (a full tomato ≈ 150g, a handful of coriander ≈ 30g)
 - Return ONLY a JSON array of objects, nothing else"""
 
-        result = invoke_claude_vision(
+        result = invoke_bedrock_vision(
             image_bytes=image_bytes,
+            image_format="jpeg",
             prompt=vision_prompt,
             system_prompt=(
                 "You are a food recognition AI for Indian households. "
@@ -169,3 +178,16 @@ Rules:
                 "status_code": 500,
             }),
         }
+
+
+def _parse_fridge_key(key: str) -> Optional[tuple[str, str]]:
+    """Parse an S3 key of the form
+    ``uploads/{household_id}/{image_id}_{timestamp}_fridge.jpg``.
+
+    Returns ``(household_id, image_id)``, or ``None`` if the key is not a
+    fridge photo (e.g. a bill).
+    """
+    parts = key.split("/")
+    if len(parts) < 3 or not parts[2].endswith(UPLOAD_SUFFIX_FRIDGE):
+        return None
+    return parts[1], parts[2].split("_")[0]
