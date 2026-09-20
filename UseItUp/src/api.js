@@ -211,6 +211,17 @@ export function addInventoryItem(householdId, ingredientId, quantityG) {
   });
 }
 
+export function deleteInventoryItem(householdId, { itemSk, ingredientId } = {}) {
+  return request("/inventory", {
+    method: "DELETE",
+    body: {
+      household_id: householdId,
+      item_sk: itemSk || undefined,
+      ingredient_id: ingredientId || undefined,
+    },
+  });
+}
+
 export function updateProfile(householdId, fields) {
   return request("/profile", {
     method: "PUT",

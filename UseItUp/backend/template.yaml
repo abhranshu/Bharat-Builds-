@@ -163,7 +163,7 @@ Resources:
       Name: !Sub "UseItUp-api-${EnvironmentName}"
       StageName: !Sub "${EnvironmentName}"
       Cors:
-        AllowMethods: "'GET,POST,PUT,OPTIONS'"
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization'"
         AllowOrigin: "'*'"
 
@@ -301,6 +301,24 @@ Resources:
             Method: get
             RequestParameters:
               method.request.querystring.household_id: true
+
+  # --- DELETE INVENTORY ---
+  DeleteInventoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "UseItUp-delete-inventory-${EnvironmentName}"
+      Handler: src/functions/delete_inventory/app.handler
+      Description: Remove an ingredient from household inventory
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppDataTable
+      Events:
+        DeleteInventory:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /inventory
+            Method: delete
 
   # --- MARK COOKED ---
   MarkCookedFunction:

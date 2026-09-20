@@ -66,6 +66,7 @@ def handler(event, context):
                 predicted_expiry=item.get("predicted_expiry", ""),
                 source=item.get("source", "bill"),
                 expiry_confidence=item.get("expiry_confidence", "high"),
+                item_sk=item.get("SK", ""),
             )
             ingredients.append(ingredient)
 

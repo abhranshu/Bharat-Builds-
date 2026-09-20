@@ -238,6 +238,17 @@
         <p class="console-hint">
           Camera &rarr; snap your fridge. Bill &rarr; Textract. Fridge photo &rarr; Nova 2 Lite vision.
         </p>
+
+        <div class="console-row">
+          <label class="field" style="flex: 1 1 320px;">
+            <span>Additional Valid Items (comma-separated)</span>
+            <input id="additional-valid-items" type="text" placeholder="e.g. bread, cheese, apple, almonds, pasta, butter">
+          </label>
+          <button id="btn-save-valid-items" class="btn btn-ghost" type="button">Save Valid Items</button>
+        </div>
+        <p id="valid-items-status" class="console-hint">
+          22 core staples (Tomato, Onion, Chicken Breast, Eggs, Milk, etc.) are always valid. Extra items entered here are also accepted during bill & fridge scans. Any unlisted item will not be uploaded.
+        </p>
       </div>
 
       <!-- 2b · Manual ingredient entry -->
@@ -252,6 +263,11 @@
             <select id="manual-ingredient">
               <option value="">— pick one —</option>
             </select>
+          </label>
+
+          <label class="field" id="custom-ingredient-field" style="display: none;">
+            <span>Custom item name</span>
+            <input id="manual-custom-name" type="text" placeholder="e.g. Bread">
           </label>
 
           <label class="field">

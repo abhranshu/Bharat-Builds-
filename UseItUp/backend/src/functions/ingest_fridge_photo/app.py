@@ -25,11 +25,16 @@ from src.shared.constants import (
     PK_PREFIX_HOUSEHOLD,
     PK_PREFIX_CATALOG,
     SK_PREFIX_ITEM,
+    SK_PREFIX_PROFILE,
     SK_PREFIX_UPLOAD,
     UPLOAD_SUFFIX_FRIDGE,
 )
 from src.shared.bedrock_client import invoke_bedrock_vision
-from src.shared.ingredient_catalog import get_catalog_for_prompt
+from src.shared.ingredient_catalog import (
+    get_catalog_for_prompt,
+    get_expanded_catalog_prompt,
+    is_valid_ingredient,
+)
 from src.shared.expiry_predictor import predict_expiry
 
 logger = logging.getLogger(__name__)
@@ -68,21 +73,25 @@ def handler(event, context):
         image_bytes = image_obj["Body"].read()
 
         # Step 2: Analyze with Bedrock Vision
-        catalog_text = get_catalog_for_prompt()
+        pk = f"{PK_PREFIX_HOUSEHOLD}{household_id}"
+        profile = dynamo_client.get_item(pk=pk, sk=SK_PREFIX_PROFILE) or {}
+        custom_items = profile.get("additional_valid_ingredients") or []
+
+        catalog_text = get_expanded_catalog_prompt(custom_items)
 
         vision_prompt = f"""Analyze this fridge photo and identify all visible food ingredients.
 
 For each ingredient you find, return it as a JSON object with:
-- "ingredient_id": MUST be one of the valid IDs from the catalog below
+- "ingredient_id": MUST be one of the valid IDs from the catalog or additional valid ingredients below (lowercase_with_underscores)
 - "estimated_quantity_g": your best guess of the quantity in grams
 
-CATALOG (valid ingredient_ids):
+VALID INGREDIENTS:
 {catalog_text}
 
 Rules:
 - Only include items you can ACTUALLY SEE in the image
-- You MUST use only ingredient_ids from the catalog
-- If you see something not in the catalog, skip it
+- You MUST use only ingredient_ids from the valid ingredients list above
+- If you see something not in the valid ingredients list, skip it
 - Estimate quantity realistically (a full tomato ≈ 150g, a handful of coriander ≈ 30g)
 - Return ONLY a JSON array of objects, nothing else"""
 
@@ -108,6 +117,9 @@ Rules:
         for item in result:
             ingredient_id = item.get("ingredient_id", "")
             if not ingredient_id:
+                continue
+            if not is_valid_ingredient(ingredient_id, custom_items):
+                logger.info("Skipping invalid item not in catalog or custom items: %s", ingredient_id)
                 continue
 
             quantity_g = item.get("estimated_quantity_g", 200)

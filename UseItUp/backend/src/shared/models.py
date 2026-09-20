@@ -55,6 +55,10 @@ class Ingredient(BaseModel):
         default="high",
         description="high (from bill) or estimated (from photo)",
     )
+    item_sk: Optional[str] = Field(
+        default=None,
+        description="DynamoDB sort key",
+    )
 
 
 class IngredientUpsert(BaseModel):
@@ -137,6 +141,7 @@ class HouseholdProfile(BaseModel):
     language: str = Field(default="en")
     daily_calorie_target: float = Field(default=2000.0, ge=500, le=10000)
     daily_protein_target: float = Field(default=60.0, ge=10, le=500)
+    additional_valid_ingredients: list[str] = Field(default_factory=list)
 
 
 # ============================================
@@ -188,6 +193,21 @@ class GetInventoryResponse(BaseModel):
     count: int
 
 
+class DeleteInventoryRequest(BaseModel):
+    """Request to delete an ingredient from inventory."""
+    household_id: str = Field(..., min_length=1)
+    item_sk: Optional[str] = None
+    ingredient_id: Optional[str] = None
+
+
+class DeleteInventoryResponse(BaseModel):
+    """Response after deleting an inventory item."""
+    message: str
+    household_id: str
+    deleted_sk: Optional[str] = None
+    ingredient_id: Optional[str] = None
+
+
 class MarkCookedRequest(BaseModel):
     """Request to mark a recipe as cooked."""
     household_id: str = Field(..., min_length=1)
@@ -235,6 +255,7 @@ class UpdateProfileRequest(BaseModel):
     language: Optional[str] = None
     daily_calorie_target: Optional[float] = Field(default=None, ge=500)
     daily_protein_target: Optional[float] = Field(default=None, ge=10)
+    additional_valid_ingredients: Optional[list[str]] = None
 
 
 class UpdateProfileResponse(BaseModel):

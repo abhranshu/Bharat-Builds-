@@ -9,6 +9,7 @@
 import {
   ApiError,
   addInventoryItem,
+  deleteInventoryItem,
   getApiBase,
   getHouseholdId,
   getInventory,
@@ -89,6 +90,7 @@ function num(value, digits = 1) {
 
 const state = {
   busy: false,
+  inventory: null,
 };
 
 /* ============================================
@@ -223,13 +225,56 @@ function initUpload() {
 
     if (result) {
       log(
-        `Uploaded as ${result.image_id} (${result.sizeKb} KB). Processing is running in the background.`,
+        `Uploaded as ${result.image_id} (${result.sizeKb} KB). AI analysis started.`,
         "ok"
       );
-      setStatus("Upload complete. Refreshing inventory shortly…", "ok");
 
-      // Give the S3-triggered Lambda a moment, then refresh automatically.
-      setTimeout(() => loadInventory({ silent: true }), 4000);
+      const initialCount = state.inventory?.items?.length ?? 0;
+      let attempt = 0;
+      const maxAttempts = 12;
+      const pollIntervalMs = 3000;
+
+      setStatus(
+        `Analyzing ${uploadType === "bill" ? "grocery bill" : "fridge photo"} with AI (checking 1/${maxAttempts})…`,
+        "busy"
+      );
+
+      const pollTimer = setInterval(async () => {
+        attempt++;
+        setStatus(
+          `Analyzing ${uploadType === "bill" ? "grocery bill" : "fridge photo"} with AI (checking ${attempt}/${maxAttempts})…`,
+          "busy"
+        );
+
+        try {
+          const payload = await getInventory(getHouseholdId());
+          const newCount = payload?.items?.length ?? 0;
+
+          if (newCount > initialCount) {
+            clearInterval(pollTimer);
+            renderInventory(payload);
+            const added = newCount - initialCount;
+            setStatus(`Done! Extracted and added ${added} item(s).`, "ok");
+            log(`Scan complete: ${added} ingredient(s) added to inventory.`, "ok");
+            return;
+          }
+
+          if (attempt >= maxAttempts) {
+            clearInterval(pollTimer);
+            renderInventory(payload);
+            setStatus("Scan completed.", "ok");
+            log(
+              "Finished scanning image. If expected items didn't appear, verify they match the 22 catalog or your Additional Valid Items list.",
+              "muted"
+            );
+          }
+        } catch {
+          if (attempt >= maxAttempts) {
+            clearInterval(pollTimer);
+            setStatus("Image scan finished.", "");
+          }
+        }
+      }, pollIntervalMs);
     }
   };
 
@@ -265,12 +310,48 @@ function initUpload() {
    INVENTORY
    ============================================ */
 
+async function removeInventoryItem(index) {
+  if (state.busy) return;
+  if (!state.inventory || !Array.isArray(state.inventory.items)) return;
+  const removed = state.inventory.items[index];
+  if (!removed) return;
+
+  // Immediate UI update
+  state.inventory.items.splice(index, 1);
+  state.inventory.count = state.inventory.items.length;
+  renderInventory(state.inventory);
+
+  const itemName = removed.name || removed.ingredient_id;
+
+  // If backend API is configured, delete permanently from DynamoDB
+  if (getApiBase()) {
+    try {
+      await deleteInventoryItem(getHouseholdId(), {
+        itemSk: removed.item_sk,
+        ingredientId: removed.ingredient_id,
+      });
+      log(`Removed ${itemName} from inventory and database.`, "ok");
+    } catch (error) {
+      fail(error);
+    }
+  } else {
+    log(`Removed ${itemName} from inventory.`, "ok");
+  }
+}
+
 function renderInventory(payload) {
+  if (payload) {
+    state.inventory = {
+      ...payload,
+      items: Array.isArray(payload.items) ? [...payload.items] : [],
+    };
+  }
+
   const container = $("inventory-results");
   if (!container) return;
   clear(container);
 
-  const items = payload?.items || [];
+  const items = state.inventory?.items || [];
   if (!items.length) {
     container.appendChild(
       el("p", {
@@ -286,8 +367,18 @@ function renderInventory(payload) {
   );
 
   const list = el("ul", { className: "inventory-list" });
-  for (const item of items) {
+  items.forEach((item, index) => {
     const badge = expiryBadge(item.predicted_expiry);
+
+    const removeBtn = el("button", {
+      className: "btn btn-tiny btn-remove-item",
+      attrs: {
+        type: "button",
+        "aria-label": `Remove ${item.name || item.ingredient_id}`,
+      },
+      text: "Remove",
+    });
+    removeBtn.addEventListener("click", () => removeInventoryItem(index));
 
     list.appendChild(
       el("li", {
@@ -318,12 +409,13 @@ function renderInventory(payload) {
                 className: "inventory-source",
                 text: item.source === "fridge_photo" ? "photo" : "bill",
               }),
+              removeBtn,
             ],
           }),
         ],
       })
     );
-  }
+  });
   container.appendChild(list);
 }
 
@@ -723,34 +815,171 @@ const INGREDIENT_CATALOG = [
   ["banana", "Banana"],
 ];
 
-function initManualIngredient() {
+function getCustomValidItems() {
+  try {
+    const raw = localStorage.getItem(`useitup.custom_valid_items.${getHouseholdId()}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomValidItems(items) {
+  try {
+    localStorage.setItem(
+      `useitup.custom_valid_items.${getHouseholdId()}`,
+      JSON.stringify(items)
+    );
+  } catch {}
+}
+
+function populateIngredientDropdown() {
   const select = $("manual-ingredient");
   if (!select) return;
 
-  // Populate the dropdown
+  clear(select);
+  select.appendChild(el("option", { text: "— pick one —", attrs: { value: "" } }));
+
   for (const [id, name] of INGREDIENT_CATALOG) {
-    const option = el("option", { text: name, attrs: { value: id } });
-    select.appendChild(option);
+    select.appendChild(el("option", { text: name, attrs: { value: id } }));
   }
 
+  const custom = getCustomValidItems();
+  if (custom.length) {
+    const group = el("optgroup", { attrs: { label: "Custom Valid Items" } });
+    for (const item of custom) {
+      const id = item.toLowerCase().replace(/[\s-]+/g, "_");
+      group.appendChild(
+        el("option", {
+          text: item.charAt(0).toUpperCase() + item.slice(1),
+          attrs: { value: id },
+        })
+      );
+    }
+    select.appendChild(group);
+  }
+
+  select.appendChild(
+    el("option", { text: "— write custom item —", attrs: { value: "__custom__" } })
+  );
+}
+
+function initValidItems() {
+  const input = $("additional-valid-items");
+  const saveBtn = $("btn-save-valid-items");
+  const statusHint = $("valid-items-status");
+  if (!input) return;
+
+  const current = getCustomValidItems();
+  if (current.length) {
+    input.value = current.join(", ");
+  }
+
+  saveBtn?.addEventListener("click", async () => {
+    const raw = input.value || "";
+    const items = raw
+      .split(/[,;\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    saveCustomValidItems(items);
+
+    if (statusHint) {
+      statusHint.textContent = `Saved ${items.length} custom valid item(s): ${items.join(", ")}`;
+      statusHint.style.color = "#4ade80";
+    }
+
+    log(`Saved ${items.length} additional valid item(s).`, "ok");
+
+    if (getApiBase()) {
+      try {
+        await updateProfile(getHouseholdId(), {
+          additional_valid_ingredients: items,
+        });
+        log("Synced additional valid items with cloud profile.", "ok");
+      } catch (err) {
+        log(`Note: Saved locally. (${err.message})`, "muted");
+      }
+    }
+
+    populateIngredientDropdown();
+  });
+}
+
+function initManualIngredient() {
+  const select = $("manual-ingredient");
+  const customField = $("custom-ingredient-field");
+  const customInput = $("manual-custom-name");
+  if (!select) return;
+
+  populateIngredientDropdown();
+
+  select.addEventListener("change", () => {
+    if (customField) {
+      customField.style.display = select.value === "__custom__" ? "flex" : "none";
+    }
+  });
+
   $("btn-add-ingredient")?.addEventListener("click", async () => {
-    const ingredientId = select.value;
+    let ingredientId = select.value;
+    let displayName = "";
+
+    if (ingredientId === "__custom__") {
+      const customVal = customInput?.value?.trim() || "";
+      if (!customVal) {
+        const statusEl = $("manual-status");
+        if (statusEl) {
+          statusEl.textContent = "Enter a custom ingredient name.";
+          statusEl.dataset.tone = "error";
+        }
+        return;
+      }
+      ingredientId = customVal.toLowerCase().replace(/[\s-]+/g, "_");
+      displayName = customVal;
+
+      const current = getCustomValidItems();
+      if (!current.some((c) => c.toLowerCase() === customVal.toLowerCase())) {
+        current.push(customVal);
+        saveCustomValidItems(current);
+        if ($("additional-valid-items")) {
+          $("additional-valid-items").value = current.join(", ");
+        }
+        if (getApiBase()) {
+          updateProfile(getHouseholdId(), {
+            additional_valid_ingredients: current,
+          }).catch(() => {});
+        }
+        populateIngredientDropdown();
+      }
+    } else {
+      displayName = select.options[select.selectedIndex]?.text || ingredientId;
+    }
+
     const quantity = Number($("manual-quantity")?.value);
     const statusEl = $("manual-status");
 
     if (!ingredientId) {
-      if (statusEl) { statusEl.textContent = "Pick an ingredient."; statusEl.dataset.tone = "error"; }
+      if (statusEl) {
+        statusEl.textContent = "Pick an ingredient.";
+        statusEl.dataset.tone = "error";
+      }
       return;
     }
     if (!quantity || quantity <= 0) {
-      if (statusEl) { statusEl.textContent = "Enter a valid quantity."; statusEl.dataset.tone = "error"; }
+      if (statusEl) {
+        statusEl.textContent = "Enter a valid quantity.";
+        statusEl.dataset.tone = "error";
+      }
       return;
     }
 
-    await run(`Adding ${select.options[select.selectedIndex].text}`, async () => {
+    await run(`Adding ${displayName}`, async () => {
       const result = await addInventoryItem(getHouseholdId(), ingredientId, quantity);
-      log(result?.message || `Added ${ingredientId} (${quantity}g).`, "ok");
-      if (statusEl) { statusEl.textContent = "Added!"; statusEl.dataset.tone = "ok"; }
+      log(result?.message || `Added ${displayName} (${quantity}g).`, "ok");
+      if (statusEl) {
+        statusEl.textContent = "Added!";
+        statusEl.dataset.tone = "ok";
+      }
       loadInventory({ silent: true });
       return result;
     });
@@ -780,6 +1009,7 @@ export function initAppConsole() {
 
   initConnection();
   initUpload();
+  initValidItems();
   initManualIngredient();
   initRecipes();
   initNutrition();

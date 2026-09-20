@@ -357,6 +357,44 @@ def get_catalog_for_prompt() -> str:
     return "\n".join(lines)
 
 
+def normalize_ingredient_id(name: str) -> str:
+    """Normalize any ingredient name to canonical ID format."""
+    return name.strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def is_valid_ingredient(ingredient_id: str, custom_items: list[str] | None = None) -> bool:
+    """Check if an ingredient is in the 22 static catalog or custom items."""
+    nid = normalize_ingredient_id(ingredient_id)
+    if nid in get_all_ingredient_ids():
+        return True
+    if search_by_name(ingredient_id) is not None:
+        return True
+    if custom_items:
+        normalized_custom = {normalize_ingredient_id(c) for c in custom_items if c}
+        if nid in normalized_custom:
+            return True
+        for c in custom_items:
+            if c and c.strip().lower() == ingredient_id.strip().lower():
+                return True
+    return False
+
+
+def get_expanded_catalog_prompt(custom_items: list[str] | None = None) -> str:
+    """Format the catalog + custom items for Bedrock prompts."""
+    lines = [get_catalog_for_prompt()]
+    if custom_items:
+        custom_lines = []
+        for item in custom_items:
+            clean = item.strip()
+            if clean:
+                iid = normalize_ingredient_id(clean)
+                custom_lines.append(f"- {iid}: {clean.title()}")
+        if custom_lines:
+            lines.append("\nADDITIONAL VALID INGREDIENTS:")
+            lines.extend(custom_lines)
+    return "\n".join(lines)
+
+
 # ============================================
 # OPTIONAL DYNAMODB REFRESH
 # ============================================

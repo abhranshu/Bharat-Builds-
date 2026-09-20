@@ -97,3 +97,16 @@ class TestCatalogForPrompt:
         prompt = get_catalog_for_prompt()
         assert "- tomato: Tomato" in prompt
         assert "- paneer: Paneer" in prompt
+
+    def test_expanded_catalog_prompt_with_custom_items(self):
+        from src.shared.ingredient_catalog import get_expanded_catalog_prompt, is_valid_ingredient
+        prompt = get_expanded_catalog_prompt(["bread", "cheese slice"])
+        assert "- tomato: Tomato" in prompt
+        assert "- bread: Bread" in prompt
+        assert "- cheese_slice: Cheese Slice" in prompt
+
+        assert is_valid_ingredient("tomato") is True
+        assert is_valid_ingredient("tamatar") is True
+        assert is_valid_ingredient("bread", ["bread"]) is True
+        assert is_valid_ingredient("cheese_slice", ["cheese slice"]) is True
+        assert is_valid_ingredient("dragonfruit", ["bread"]) is False

@@ -25,12 +25,17 @@ from src.shared.constants import (
     PK_PREFIX_CATALOG,
     SK_META,
     SK_PREFIX_ITEM,
+    SK_PREFIX_PROFILE,
     SK_PREFIX_UPLOAD,
     UPLOAD_SUFFIX_BILL,
 )
 from src.shared.textract_client import analyze_expense, TextractExpenseResult
 from src.shared.bedrock_client import invoke_bedrock
-from src.shared.ingredient_catalog import get_catalog_for_prompt
+from src.shared.ingredient_catalog import (
+    get_catalog_for_prompt,
+    get_expanded_catalog_prompt,
+    is_valid_ingredient,
+)
 from src.shared.expiry_predictor import predict_expiry
 
 logger = logging.getLogger(__name__)
@@ -68,9 +73,14 @@ def handler(event, context):
         # Step 2: Analyze with Textract
         expense_result: TextractExpenseResult = analyze_expense(image_bytes)
 
+        # Step 2.5: Load household profile for custom valid items
+        pk = f"{PK_PREFIX_HOUSEHOLD}{household_id}"
+        profile = dynamo_client.get_item(pk=pk, sk=SK_PREFIX_PROFILE) or {}
+        custom_items = profile.get("additional_valid_ingredients") or []
+
         # Step 3: Map raw items → canonical ingredient_ids via Bedrock
         raw_items = [item.to_dict() for item in expense_result.items]
-        normalized_items = _normalize_items_with_bedrock(raw_items)
+        normalized_items = _normalize_items_with_bedrock(raw_items, custom_items=custom_items)
 
         # Step 4: Determine purchase date
         purchase_date = date.today()
@@ -89,6 +99,9 @@ def handler(event, context):
         written_count = 0
         for item in normalized_items:
             ingredient_id = item["ingredient_id"]
+            if not is_valid_ingredient(ingredient_id, custom_items):
+                logger.info("Skipping invalid item not in catalog or custom items: %s", ingredient_id)
+                continue
             quantity_g = item.get("quantity_g", 500)  # Default 500g if unknown
 
             predicted_expiry, confidence = predict_expiry(
@@ -182,27 +195,30 @@ def _parse_bill_key(key: str) -> Optional[tuple[str, str]]:
     return parts[1], parts[2].split("_")[0]
 
 
-def _normalize_items_with_bedrock(raw_items: list[dict]) -> list[dict]:
+def _normalize_items_with_bedrock(
+    raw_items: list[dict],
+    custom_items: list[str] | None = None,
+) -> list[dict]:
     """Map raw Textract items to canonical ingredient_ids via Bedrock."""
-    catalog_text = get_catalog_for_prompt()
+    catalog_text = get_expanded_catalog_prompt(custom_items)
 
     prompt = f"""Map each of these grocery bill items to a canonical ingredient
-from the catalog below. Return ONLY a JSON array.
+from the catalog and additional valid ingredients below. Return ONLY a JSON array.
 
-CATALOG (valid ingredient_ids):
+VALID INGREDIENTS:
 {catalog_text}
 
 BILL ITEMS:
 {json.dumps(raw_items, indent=2)}
 
 Return a JSON array where each element has:
-- "ingredient_id": one of the valid IDs from the catalog
+- "ingredient_id": one of the valid IDs from the catalog or additional valid ingredients (lowercase_with_underscores)
 - "quantity_g": estimated quantity in grams (use 500 as default if not on the bill)
 - "original_name": the raw name from the bill
 
 Rules:
-- You MUST use only ingredient_ids that exist in the catalog above
-- If you cannot match an item to the catalog, skip it
+- You MUST use only ingredient_ids that exist in the catalog or additional valid ingredients above
+- If you cannot match an item to the valid ingredients, skip it
 - Combine duplicate items into a single entry with summed quantities
 - Return ONLY the JSON array, nothing else"""
 

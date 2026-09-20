@@ -9,11 +9,13 @@ from datetime import date, timedelta
 from pydantic import BaseModel, Field, field_validator
 
 from src.shared import dynamo_client
-from src.shared.constants import PK_PREFIX_HOUSEHOLD, SK_PREFIX_ITEM
+from src.shared.constants import PK_PREFIX_HOUSEHOLD, SK_PREFIX_ITEM, SK_PREFIX_PROFILE
 from src.shared.ingredient_catalog import (
     get_shelf_life,
     get_canonical_name,
     get_all_ingredient_ids,
+    is_valid_ingredient,
+    normalize_ingredient_id,
 )
 from src.shared.models import UploadType
 
@@ -34,12 +36,9 @@ class AddInventoryRequest(BaseModel):
     @field_validator("ingredient_id")
     @classmethod
     def validate_ingredient_id(cls, v: str) -> str:
-        v = v.strip().lower().replace(" ", "_")
-        if v not in get_all_ingredient_ids():
-            raise ValueError(
-                f"Unknown ingredient '{v}'. "
-                f"Valid IDs: {', '.join(sorted(get_all_ingredient_ids()))}"
-            )
+        v = normalize_ingredient_id(v)
+        if not v:
+            raise ValueError("Ingredient ID cannot be empty")
         return v
 
 
@@ -61,6 +60,19 @@ def handler(event, context):
         request = AddInventoryRequest(**body)
 
         pk = f"{PK_PREFIX_HOUSEHOLD}{request.household_id}"
+
+        profile = dynamo_client.get_item(pk=pk, sk=SK_PREFIX_PROFILE) or {}
+        custom_items = profile.get("additional_valid_ingredients") or []
+
+        if not is_valid_ingredient(request.ingredient_id, custom_items):
+            return {
+                "statusCode": 400,
+                "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
+                "body": json.dumps({
+                    "error": f"'{request.ingredient_id}' is not in the valid items list. Add it to Additional Valid Items in your profile to allow it.",
+                    "status_code": 400,
+                }),
+            }
         today = date.today()
         shelf_life = get_shelf_life(request.ingredient_id)
         predicted_expiry = today + timedelta(days=shelf_life)
