@@ -6,7 +6,7 @@ skip_pull_image = false
 
 [default.deploy.parameters]
 stack_name = "UseItUp-dev"
-s3_bucket = "useitup-sam-deployments"
+region = "ap-south-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 parameter_overrides = "EnvironmentName=\"dev\""

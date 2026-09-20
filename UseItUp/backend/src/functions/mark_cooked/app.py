@@ -13,6 +13,7 @@ from src.shared.constants import (
     SK_PREFIX_ITEM,
     SK_PREFIX_COOKED,
 )
+from pydantic import ValidationError
 from src.shared.models import MarkCookedRequest, MarkCookedResponse, NutritionInfo
 from src.shared.nutrition_calculator import calculate_recipe_nutrition
 
@@ -22,61 +23,89 @@ logger = logging.getLogger(__name__)
 def handler(event, context):
     """Lambda handler for POST /cooked."""
     try:
-        body = json.loads(event.get("body", "{}"))
+        raw_body = event.get("body", "{}")
+        if isinstance(raw_body, str):
+            try:
+                body = json.loads(raw_body)
+            except json.JSONDecodeError as exc:
+                return {
+                    "statusCode": 400,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps({"error": "Invalid JSON body", "detail": str(exc)}),
+                }
+        elif isinstance(raw_body, dict):
+            body = raw_body
+        else:
+            return {
+                "statusCode": 400,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({"error": "Request body must be a JSON object"}),
+            }
         request = MarkCookedRequest(**body)
 
         pk = f"{PK_PREFIX_HOUSEHOLD}{request.household_id}"
 
         # Step 1: Deduct ingredients from inventory
+        # Query inventory once, then look up each recipe ingredient.
+        existing_items = dynamo_client.query_items(
+            pk=pk, sk_prefix=SK_PREFIX_ITEM
+        )
+        # Index by ingredient_id for O(1) lookup.
+        inventory_by_id: dict[str, dict] = {
+            item.get("ingredient_id"): item
+            for item in existing_items
+            if item.get("ingredient_id")
+        }
+
         updated_items = []
         for recipe_ing in request.recipe.ingredients:
-            item_id = f"{recipe_ing.ingredient_id}_*"
+            item = inventory_by_id.get(recipe_ing.ingredient_id)
+            if not item:
+                logger.warning(
+                    "Ingredient %s not found in inventory for household=%s",
+                    recipe_ing.ingredient_id,
+                    request.household_id,
+                )
+                continue
 
-            # Find the matching inventory item
-            existing_items = dynamo_client.query_items(
-                pk=pk, sk_prefix=SK_PREFIX_ITEM
-            )
+            current_qty = float(item.get("quantity_g", 0))
+            used_qty = recipe_ing.grams * request.servings_cooked
+            new_qty = max(0, current_qty - used_qty)
 
-            for item in existing_items:
-                if item.get("ingredient_id") == recipe_ing.ingredient_id:
-                    current_qty = float(item.get("quantity_g", 0))
-                    used_qty = recipe_ing.grams * request.servings_cooked
-                    new_qty = max(0, current_qty - used_qty)
+            item_sk = item.get("SK", "")
 
-                    item_sk = item.get("SK", "")
-
-                    if new_qty <= 0:
-                        # Delete the item if quantity hits zero
-                        dynamo_client.delete_item(pk=pk, sk=item_sk)
-                        logger.info("Deleted item %s (quantity depleted)", item_sk)
-                    else:
-                        # Update quantity
-                        dynamo_client.update_item(
-                            pk=pk,
-                            sk=item_sk,
-                            updates={"quantity_g": new_qty},
-                        )
-                        logger.info(
-                            "Updated %s: %.1fg → %.1fg",
-                            item_sk,
-                            current_qty,
-                            new_qty,
-                        )
-
-                    break
+            if new_qty <= 0:
+                # Delete the item if quantity hits zero
+                dynamo_client.delete_item(pk=pk, sk=item_sk)
+                logger.info("Deleted item %s (quantity depleted)", item_sk)
+            else:
+                # Update quantity
+                dynamo_client.update_item(
+                    pk=pk,
+                    sk=item_sk,
+                    updates={"quantity_g": new_qty},
+                )
+                logger.info(
+                    "Updated %s: %.1fg → %.1fg",
+                    item_sk,
+                    current_qty,
+                    new_qty,
+                )
 
         # Step 2: Write COOKED# record
+        # Calculate per-serving nutrition using the recipe's stated servings,
+        # then scale to the actual number of servings cooked.
         nutrition_totals = calculate_recipe_nutrition(
             ingredients=[
                 {"ingredient_id": ri.ingredient_id, "grams": ri.grams}
                 for ri in request.recipe.ingredients
             ],
-            servings=request.servings_cooked,
+            servings=request.recipe.servings,
         )
-        # Scale totals to actual servings
+        # Scale totals to actual servings cooked
         for key in nutrition_totals:
             nutrition_totals[key] = round(
-                nutrition_totals[key] * request.servings_cooked / request.recipe.servings,
+                nutrition_totals[key] * request.servings_cooked,
                 1,
             )
 
@@ -129,6 +158,18 @@ def handler(event, context):
             "statusCode": 200,
             "headers": {"Content-Type": "application/json"},
             "body": response.model_dump_json(),
+        }
+
+    except ValidationError as exc:
+        logger.warning("Validation error: %s", exc)
+        return {
+            "statusCode": 400,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({
+                "error": "Validation error",
+                "detail": str(exc),
+                "status_code": 400,
+            }),
         }
 
     except Exception as exc:

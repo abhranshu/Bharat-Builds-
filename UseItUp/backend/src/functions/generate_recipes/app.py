@@ -32,6 +32,7 @@ from src.shared.constants import (
 from src.shared.ingredient_catalog import get_canonical_name
 from src.shared.expiry_predictor import days_until_expiry
 from src.shared.bedrock_client import invoke_bedrock
+from pydantic import ValidationError
 from src.shared.nutrition_calculator import calculate_nutrition
 from src.shared.models import (
     GenerateRecipesRequest,
@@ -47,7 +48,24 @@ logger = logging.getLogger(__name__)
 def handler(event, context):
     """Lambda handler for POST /recipes/generate."""
     try:
-        body = json.loads(event.get("body", "{}"))
+        raw_body = event.get("body", "{}")
+        if isinstance(raw_body, str):
+            try:
+                body = json.loads(raw_body)
+            except json.JSONDecodeError as exc:
+                return {
+                    "statusCode": 400,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps({"error": "Invalid JSON body", "detail": str(exc)}),
+                }
+        elif isinstance(raw_body, dict):
+            body = raw_body
+        else:
+            return {
+                "statusCode": 400,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({"error": "Request body must be a JSON object"}),
+            }
         request = GenerateRecipesRequest(**body)
 
         # Step 1: Get household inventory
@@ -237,6 +255,18 @@ def handler(event, context):
             "statusCode": 200,
             "headers": {"Content-Type": "application/json"},
             "body": response.model_dump_json(),
+        }
+
+    except ValidationError as exc:
+        logger.warning("Validation error: %s", exc)
+        return {
+            "statusCode": 400,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({
+                "error": "Validation error",
+                "detail": str(exc),
+                "status_code": 400,
+            }),
         }
 
     except Exception as exc:

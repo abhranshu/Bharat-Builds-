@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timedelta
 
 import boto3
+from pydantic import ValidationError
 
 from src.shared.constants import (
     BUCKET_NAME,
@@ -140,6 +141,20 @@ def handler(event, context):
             },
             "body": json.dumps({
                 "error": "Invalid JSON request body",
+                "detail": str(exc),
+                "status_code": 400,
+            }),
+        }
+
+    except ValidationError as exc:
+        logger.warning("Validation error: %s", exc)
+        return {
+            "statusCode": 400,
+            "headers": {
+                "Content-Type": "application/json"
+            },
+            "body": json.dumps({
+                "error": "Validation error",
                 "detail": str(exc),
                 "status_code": 400,
             }),
