@@ -17,6 +17,12 @@ from src.shared.models import GetInventoryResponse, Ingredient
 
 logger = logging.getLogger(__name__)
 
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
+}
+
 
 def handler(event, context):
     """Lambda handler for GET /inventory?household_id=xxx."""
@@ -27,7 +33,7 @@ def handler(event, context):
         if not household_id:
             return {
                 "statusCode": 400,
-                "headers": {"Content-Type": "application/json"},
+                "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
                 "body": json.dumps({
                     "error": "Missing required parameter: household_id",
                     "status_code": 400,
@@ -74,7 +80,7 @@ def handler(event, context):
 
         return {
             "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
+            "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
             "body": response.model_dump_json(),
         }
 
@@ -82,7 +88,7 @@ def handler(event, context):
         logger.error("Error fetching inventory: %s", exc)
         return {
             "statusCode": 500,
-            "headers": {"Content-Type": "application/json"},
+            "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
             "body": json.dumps({
                 "error": "Internal server error",
                 "detail": str(exc),

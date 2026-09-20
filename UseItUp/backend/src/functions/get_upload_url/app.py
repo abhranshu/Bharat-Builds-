@@ -24,6 +24,12 @@ from src.shared.models import GetUploadUrlRequest, GetUploadUrlResponse
 
 logger = logging.getLogger(__name__)
 
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
+}
+
 _s3 = boto3.client("s3")
 
 
@@ -38,9 +44,7 @@ def handler(event, context):
         if raw_body is None:
             return {
                 "statusCode": 400,
-                "headers": {
-                    "Content-Type": "application/json"
-                },
+                "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
                 "body": json.dumps({
                     "error": "Request body is required"
                 }),
@@ -55,9 +59,7 @@ def handler(event, context):
         if not isinstance(body, dict):
             return {
                 "statusCode": 400,
-                "headers": {
-                    "Content-Type": "application/json"
-                },
+                "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
                 "body": json.dumps({
                     "error": "Request body must be a JSON object"
                 }),
@@ -125,9 +127,7 @@ def handler(event, context):
 
         return {
             "statusCode": 200,
-            "headers": {
-                "Content-Type": "application/json"
-            },
+            "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
             "body": response.model_dump_json(),
         }
 
@@ -136,9 +136,7 @@ def handler(event, context):
 
         return {
             "statusCode": 400,
-            "headers": {
-                "Content-Type": "application/json"
-            },
+            "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
             "body": json.dumps({
                 "error": "Invalid JSON request body",
                 "detail": str(exc),
@@ -150,9 +148,7 @@ def handler(event, context):
         logger.warning("Validation error: %s", exc)
         return {
             "statusCode": 400,
-            "headers": {
-                "Content-Type": "application/json"
-            },
+            "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
             "body": json.dumps({
                 "error": "Validation error",
                 "detail": str(exc),
@@ -168,9 +164,7 @@ def handler(event, context):
 
         return {
             "statusCode": 500,
-            "headers": {
-                "Content-Type": "application/json"
-            },
+            "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
             "body": json.dumps({
                 "error": "Internal server error",
                 "detail": str(exc),

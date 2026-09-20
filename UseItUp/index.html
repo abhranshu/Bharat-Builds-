@@ -196,8 +196,8 @@
       </header>
 
 
-      <!-- 1 · Connection -->
-      <div class="console-panel">
+      <!-- 1 · Connection (hidden by default — reveal with ?debug or Ctrl+Shift+D) -->
+      <div id="connection-panel" class="console-panel console-panel--hidden">
         <div class="console-panel-head">
           <h3>1 · Connection</h3>
         </div>
@@ -227,15 +227,42 @@
         </div>
 
         <div class="button-grid">
-          <button id="btn-upload-bill" class="btn btn-primary" type="button">Upload Grocery Bill</button>
+          <button id="btn-camera" class="btn btn-primary" type="button">📷 Open Camera</button>
+          <button id="btn-upload-bill" class="btn btn-ghost" type="button">Upload Grocery Bill</button>
           <button id="btn-upload-fridge" class="btn btn-ghost" type="button">Upload Fridge Photo</button>
         </div>
 
         <input id="file-input" type="file" accept="image/*" hidden>
+        <input id="camera-input" type="file" accept="image/*" capture="environment" hidden>
 
         <p class="console-hint">
-          Bill &rarr; Textract line items. Fridge photo &rarr; Nova 2 Lite vision.
+          Camera &rarr; snap your fridge. Bill &rarr; Textract. Fridge photo &rarr; Nova 2 Lite vision.
         </p>
+      </div>
+
+      <!-- 2b · Manual ingredient entry -->
+      <div class="console-panel">
+        <div class="console-panel-head">
+          <h3>2b · Add Ingredients Manually</h3>
+        </div>
+
+        <div class="console-row">
+          <label class="field">
+            <span>Ingredient</span>
+            <select id="manual-ingredient">
+              <option value="">— pick one —</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Quantity (g)</span>
+            <input id="manual-quantity" type="number" min="1" max="5000" value="250">
+          </label>
+
+          <button id="btn-add-ingredient" class="btn btn-primary" type="button">Add</button>
+        </div>
+
+        <p id="manual-status" class="console-status"></p>
       </div>
 
 

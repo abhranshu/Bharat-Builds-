@@ -264,6 +264,24 @@ Resources:
                   - Name: suffix
                     Value: _fridge.jpg
 
+  # --- ADD INVENTORY (manual entry) ---
+  AddInventoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "UseItUp-add-inventory-${EnvironmentName}"
+      Handler: src/functions/add_inventory/app.handler
+      Description: Manually add an ingredient to household inventory
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppDataTable
+      Events:
+        AddInventory:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /inventory
+            Method: post
+
   # --- GET INVENTORY ---
   GetInventoryFunction:
     Type: AWS::Serverless::Function

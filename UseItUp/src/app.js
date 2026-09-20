@@ -8,6 +8,7 @@
 
 import {
   ApiError,
+  addInventoryItem,
   getApiBase,
   getHouseholdId,
   getInventory,
@@ -197,6 +198,7 @@ function initConnection() {
 
 function initUpload() {
   const fileInput = $("file-input");
+  const cameraInput = $("camera-input");
   if (!fileInput) return;
 
   let pendingType = null;
@@ -207,15 +209,8 @@ function initUpload() {
     fileInput.click();
   };
 
-  $("btn-upload-bill")?.addEventListener("click", () => pick("bill"));
-  $("btn-upload-fridge")?.addEventListener("click", () => pick("fridge_photo"));
-
-  fileInput.addEventListener("change", async () => {
-    const file = fileInput.files?.[0];
-    if (!file || !pendingType) return;
-
-    const uploadType = pendingType;
-    pendingType = null;
+  const handleFile = async (file, uploadType) => {
+    if (!file) return;
     const label =
       uploadType === "bill" ? "Uploading grocery bill" : "Uploading fridge photo";
 
@@ -236,6 +231,33 @@ function initUpload() {
       // Give the S3-triggered Lambda a moment, then refresh automatically.
       setTimeout(() => loadInventory({ silent: true }), 4000);
     }
+  };
+
+  // Camera button — opens device camera directly
+  $("btn-camera")?.addEventListener("click", () => {
+    pendingType = "fridge_photo";
+    cameraInput.value = "";
+    cameraInput.click();
+  });
+
+  if (cameraInput) {
+    cameraInput.addEventListener("change", () => {
+      const file = cameraInput.files?.[0];
+      const type = pendingType || "fridge_photo";
+      pendingType = null;
+      handleFile(file, type);
+    });
+  }
+
+  // Bill / Fridge Photo file picker buttons
+  $("btn-upload-bill")?.addEventListener("click", () => pick("bill"));
+  $("btn-upload-fridge")?.addEventListener("click", () => pick("fridge_photo"));
+
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    const type = pendingType;
+    pendingType = null;
+    handleFile(file, type);
   });
 }
 
@@ -671,12 +693,94 @@ function initProfile() {
    INIT
    ============================================ */
 
+/* ============================================
+   MANUAL INGREDIENT ENTRY
+   ============================================ */
+
+// Ingredient catalog — IDs and display names
+const INGREDIENT_CATALOG = [
+  ["tomato", "Tomato"],
+  ["onion", "Onion"],
+  ["potato", "Potato"],
+  ["rice", "Rice"],
+  ["wheat_flour", "Wheat Flour"],
+  ["milk", "Milk"],
+  ["curd", "Curd"],
+  ["paneer", "Paneer"],
+  ["ghee", "Ghee"],
+  ["moong_dal", "Moong Dal"],
+  ["toor_dal", "Toor Dal"],
+  ["chicken_breast", "Chicken Breast"],
+  ["egg", "Egg"],
+  ["coriander", "Coriander"],
+  ["green_chilli", "Green Chilli"],
+  ["ginger", "Ginger"],
+  ["garlic", "Garlic"],
+  ["turmeric", "Turmeric"],
+  ["oil", "Cooking Oil"],
+  ["sugar", "Sugar"],
+  ["salt", "Salt"],
+  ["banana", "Banana"],
+];
+
+function initManualIngredient() {
+  const select = $("manual-ingredient");
+  if (!select) return;
+
+  // Populate the dropdown
+  for (const [id, name] of INGREDIENT_CATALOG) {
+    const option = el("option", { text: name, attrs: { value: id } });
+    select.appendChild(option);
+  }
+
+  $("btn-add-ingredient")?.addEventListener("click", async () => {
+    const ingredientId = select.value;
+    const quantity = Number($("manual-quantity")?.value);
+    const statusEl = $("manual-status");
+
+    if (!ingredientId) {
+      if (statusEl) { statusEl.textContent = "Pick an ingredient."; statusEl.dataset.tone = "error"; }
+      return;
+    }
+    if (!quantity || quantity <= 0) {
+      if (statusEl) { statusEl.textContent = "Enter a valid quantity."; statusEl.dataset.tone = "error"; }
+      return;
+    }
+
+    await run(`Adding ${select.options[select.selectedIndex].text}`, async () => {
+      const result = await addInventoryItem(getHouseholdId(), ingredientId, quantity);
+      log(result?.message || `Added ${ingredientId} (${quantity}g).`, "ok");
+      if (statusEl) { statusEl.textContent = "Added!"; statusEl.dataset.tone = "ok"; }
+      loadInventory({ silent: true });
+      return result;
+    });
+  });
+}
+
+function revealConnectionPanel() {
+  const panel = $("connection-panel");
+  if (!panel) return;
+  panel.classList.add("is-visible");
+}
+
 export function initAppConsole() {
   const section = $("app-console");
   if (!section) return; // section not present — nothing to wire
 
+  // Reveal the Connection panel only when ?debug is in the URL or Ctrl+Shift+D is pressed.
+  if (window.location.search.includes("debug")) {
+    revealConnectionPanel();
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.shiftKey && e.key === "D") {
+      e.preventDefault();
+      revealConnectionPanel();
+    }
+  });
+
   initConnection();
   initUpload();
+  initManualIngredient();
   initRecipes();
   initNutrition();
   initProfile();

@@ -16,6 +16,12 @@ from src.shared.models import GetNutritionSummaryResponse, NutritionInfo
 
 logger = logging.getLogger(__name__)
 
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
+}
+
 DEFAULT_TARGETS = {
     "daily_calorie_target": 2000.0,
     "daily_protein_target": 60.0,
@@ -34,7 +40,7 @@ def handler(event, context):
         if not household_id:
             return {
                 "statusCode": 400,
-                "headers": {"Content-Type": "application/json"},
+                "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
                 "body": json.dumps({
                     "error": "Missing required parameter: household_id",
                     "status_code": 400,
@@ -96,7 +102,7 @@ def handler(event, context):
 
         return {
             "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
+            "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
             "body": response.model_dump_json(),
         }
 
@@ -104,7 +110,7 @@ def handler(event, context):
         logger.error("Error fetching nutrition summary: %s", exc)
         return {
             "statusCode": 500,
-            "headers": {"Content-Type": "application/json"},
+            "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
             "body": json.dumps({
                 "error": "Internal server error",
                 "detail": str(exc),

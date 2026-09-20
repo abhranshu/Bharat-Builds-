@@ -67,6 +67,14 @@
   gap: 18px;
 }
 
+.console-panel--hidden {
+  display: none;
+}
+
+.console-panel--hidden.is-visible {
+  display: flex;
+}
+
 .console-panel-head h3 {
   font-size: 0.78rem;
   font-weight: 600;

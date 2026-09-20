@@ -200,6 +200,17 @@ export function getNutritionSummary(householdId) {
   return request(`/nutrition?household_id=${encodeURIComponent(householdId)}`);
 }
 
+export function addInventoryItem(householdId, ingredientId, quantityG) {
+  return request("/inventory", {
+    method: "POST",
+    body: {
+      household_id: householdId,
+      ingredient_id: ingredientId,
+      quantity_g: quantityG,
+    },
+  });
+}
+
 export function updateProfile(householdId, fields) {
   return request("/profile", {
     method: "PUT",

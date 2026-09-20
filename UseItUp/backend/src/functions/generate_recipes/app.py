@@ -44,6 +44,12 @@ from src.shared.models import (
 
 logger = logging.getLogger(__name__)
 
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
+}
+
 
 def handler(event, context):
     """Lambda handler for POST /recipes/generate."""
@@ -55,7 +61,7 @@ def handler(event, context):
             except json.JSONDecodeError as exc:
                 return {
                     "statusCode": 400,
-                    "headers": {"Content-Type": "application/json"},
+                    "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
                     "body": json.dumps({"error": "Invalid JSON body", "detail": str(exc)}),
                 }
         elif isinstance(raw_body, dict):
@@ -63,7 +69,7 @@ def handler(event, context):
         else:
             return {
                 "statusCode": 400,
-                "headers": {"Content-Type": "application/json"},
+                "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
                 "body": json.dumps({"error": "Request body must be a JSON object"}),
             }
         request = GenerateRecipesRequest(**body)
@@ -75,7 +81,7 @@ def handler(event, context):
         if not items:
             return {
                 "statusCode": 200,
-                "headers": {"Content-Type": "application/json"},
+                "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
                 "body": json.dumps({
                     "household_id": request.household_id,
                     "recipes": [],
@@ -253,7 +259,7 @@ def handler(event, context):
 
         return {
             "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
+            "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
             "body": response.model_dump_json(),
         }
 
@@ -261,7 +267,7 @@ def handler(event, context):
         logger.warning("Validation error: %s", exc)
         return {
             "statusCode": 400,
-            "headers": {"Content-Type": "application/json"},
+            "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
             "body": json.dumps({
                 "error": "Validation error",
                 "detail": str(exc),
@@ -273,7 +279,7 @@ def handler(event, context):
         logger.error("Error generating recipes: %s", exc)
         return {
             "statusCode": 500,
-            "headers": {"Content-Type": "application/json"},
+            "headers": {**CORS_HEADERS, "Content-Type": "application/json"},
             "body": json.dumps({
                 "error": "Internal server error",
                 "detail": str(exc),
